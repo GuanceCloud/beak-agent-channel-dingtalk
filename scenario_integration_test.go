@@ -228,6 +228,136 @@ func TestDingTalkScenarioOutboundGroupAndDirectRequests(t *testing.T) {
 	}
 }
 
+func TestDingTalkScenarioCredentialInboundAndFixedReply(t *testing.T) {
+	const fixedReply = "Beak Agent 已收到你的钉钉消息"
+	connector := NewConnector()
+	eventConnector, ok := any(connector).(EventConnector)
+	if !ok {
+		t.Fatal("connector should implement EventConnector")
+	}
+	gateway := newScenarioGateway(Platform)
+	store := newScenarioStore()
+	account := scenarioDingTalkAccount("account-fixed", "client-fixed", "secret-fixed", "robot-fixed", "bot-fixed")
+
+	var sent scenarioDingTalkSentMessage
+	httpClient := &http.Client{Transport: scenarioRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Path {
+		case "/v1.0/oauth2/accessToken":
+			var body map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body["appKey"] != "client-fixed" || body["appSecret"] != "secret-fixed" {
+				t.Fatalf("token body=%+v", body)
+			}
+			return scenarioJSONResponse(map[string]any{"accessToken": "token-fixed", "expireIn": 7200})
+		case "/v1.0/robot/groupMessages/send":
+			if got := r.Header.Get("x-acs-dingtalk-access-token"); got != "token-fixed" {
+				t.Fatalf("token header=%q", got)
+			}
+			var body struct {
+				RobotCode          string `json:"robotCode"`
+				OpenConversationID string `json:"openConversationId"`
+				MsgKey             string `json:"msgKey"`
+				MsgParam           string `json:"msgParam"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			var param map[string]string
+			if err := json.Unmarshal([]byte(body.MsgParam), &param); err != nil {
+				t.Fatal(err)
+			}
+			sent = scenarioDingTalkSentMessage{
+				robotCode:      body.RobotCode,
+				conversationID: body.OpenConversationID,
+				msgKey:         body.MsgKey,
+				text:           param["content"],
+			}
+			return scenarioJSONResponse(map[string]any{"processQueryKey": "pqk-fixed"})
+		default:
+			t.Fatalf("unexpected request path: %s", r.URL.Path)
+		}
+		return nil, nil
+	})}
+
+	runtime := sdk.Runtime{
+		WorkspaceUUID: "workspace-1",
+		Channel:       sdk.Channel{UUID: "channel-1", WorkspaceUUID: "workspace-1", Platform: Platform},
+		Account:       account,
+		Gateway:       gateway,
+		AccountStore:  store,
+		HTTPClient:    httpClient,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+	err := connector.Start(ctx, runtime)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Start error=%v", err)
+	}
+
+	result, err := eventConnector.HandleEvent(context.Background(), runtime, account, []byte(`{
+		"conversationType":"2",
+		"conversationId":"cid-fixed",
+		"conversationTitle":"Fixed Reply Group",
+		"senderStaffId":"staff-fixed",
+		"senderNick":"Alice",
+		"msgId":"msg-fixed-1",
+		"msgtype":"text",
+		"text":{"content":"你好 Beak"},
+		"chatbotUserId":"bot-fixed",
+		"chatbotCorpId":"corp-fixed"
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Ignored || result.SessionUUID == "" || result.MessageUUID == "" {
+		t.Fatalf("result=%+v", result)
+	}
+	if result.Inbound == nil || result.Inbound.ChatType != sdk.ChatTypeGroup || result.Inbound.ChatID != "cid-fixed" || result.Inbound.Text != "你好 Beak" {
+		t.Fatalf("inbound=%+v", result.Inbound)
+	}
+
+	account.State = store.state("account-fixed")
+	sendResult, err := connector.Send(context.Background(), runtime, sdk.OutboundMessage{
+		AccountUUID: "account-fixed",
+		ChatType:    result.Inbound.ChatType,
+		ChatID:      result.Inbound.ChatID,
+		Text:        fixedReply,
+		MessageUUID: "agent-message-fixed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sendResult.MessageID != "pqk-fixed" || sendResult.AccountUUID != "account-fixed" {
+		t.Fatalf("send result=%+v", sendResult)
+	}
+	if sent.robotCode != "robot-fixed" || sent.conversationID != "cid-fixed" || sent.msgKey != "sampleText" || sent.text != fixedReply {
+		t.Fatalf("sent=%+v", sent)
+	}
+
+	gateway.mu.Lock()
+	createdMessages := append([]sdk.CreateMessageRequest(nil), gateway.messages...)
+	chatRequests := append([]sdk.EnsureChatSessionRequest(nil), gateway.chatRequests...)
+	gateway.mu.Unlock()
+	if len(createdMessages) != 1 || createdMessages[0].Content != "你好 Beak" || createdMessages[0].SenderID != "im:dingtalk:group:cid-fixed:user:staff-fixed" {
+		t.Fatalf("created messages=%+v", createdMessages)
+	}
+	if len(chatRequests) != 1 || chatRequests[0].AccountUUID != "account-fixed" || chatRequests[0].ChatType != sdk.ChatTypeGroup || chatRequests[0].ChatID != "cid-fixed" {
+		t.Fatalf("chat requests=%+v", chatRequests)
+	}
+	state := store.state("account-fixed")
+	peerSessions, ok := state["peer_sessions"].(map[string]string)
+	if !ok || peerSessions["group:cid-fixed"] != result.SessionUUID {
+		t.Fatalf("peer sessions=%+v", state["peer_sessions"])
+	}
+	inboundSeen, ok := state["inbound_seen"].(map[string]string)
+	if !ok || inboundSeen["account-fixed:message:msg-fixed-1"] == "" {
+		t.Fatalf("inbound seen=%+v", state["inbound_seen"])
+	}
+}
+
 func scenarioDingTalkAccount(uuid, clientID, secret, robotCode, botUserID string) sdk.ChannelAccount {
 	return sdk.ChannelAccount{
 		UUID:          uuid,
@@ -244,6 +374,13 @@ func scenarioDingTalkAccount(uuid, clientID, secret, robotCode, botUserID string
 		},
 		State: map[string]any{},
 	}
+}
+
+type scenarioDingTalkSentMessage struct {
+	robotCode      string
+	conversationID string
+	msgKey         string
+	text           string
 }
 
 func assertDingTalkTextParam(t *testing.T, raw string, want string) {
