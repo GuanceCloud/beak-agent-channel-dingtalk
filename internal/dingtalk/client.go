@@ -14,13 +14,14 @@ import (
 const defaultRequestTimeout = 15 * time.Second
 
 type Client struct {
-	BaseURL        string
-	ClientID       string
-	ClientSecret   string
-	RobotCode      string
-	AccessToken    string
-	RequestTimeout time.Duration
-	HTTPClient     *http.Client
+	BaseURL              string
+	ClientID             string
+	ClientSecret         string
+	RobotCode            string
+	AccessToken          string
+	AccessTokenExpiresAt time.Time
+	RequestTimeout       time.Duration
+	HTTPClient           *http.Client
 }
 
 func NewClient(baseURL, clientID, clientSecret, robotCode string) *Client {
@@ -41,23 +42,38 @@ func NewClient(baseURL, clientID, clientSecret, robotCode string) *Client {
 }
 
 func (c *Client) Token(ctx context.Context) (string, error) {
+	token, _, err := c.TokenWithExpiry(ctx, time.Now().UTC())
+	return token, err
+}
+
+func (c *Client) TokenWithExpiry(ctx context.Context, now time.Time) (string, time.Time, error) {
+	if strings.TrimSpace(c.AccessToken) != "" && c.AccessTokenExpiresAt.After(now.Add(5*time.Minute)) {
+		return c.AccessToken, c.AccessTokenExpiresAt, nil
+	}
 	if strings.TrimSpace(c.ClientID) == "" {
-		return "", fmt.Errorf("client_id is required")
+		return "", time.Time{}, fmt.Errorf("client_id is required")
 	}
 	if strings.TrimSpace(c.ClientSecret) == "" {
-		return "", fmt.Errorf("client_secret is required")
+		return "", time.Time{}, fmt.Errorf("client_secret is required")
 	}
 	var resp TokenResponse
 	if err := c.doJSON(ctx, http.MethodPost, "/v1.0/oauth2/accessToken", map[string]any{
 		"appKey":    c.ClientID,
 		"appSecret": c.ClientSecret,
 	}, &resp); err != nil {
-		return "", err
+		return "", time.Time{}, err
 	}
 	if resp.AccessToken == "" {
-		return "", fmt.Errorf("dingtalk access token failed: code=%s message=%s", resp.Code, resp.Message)
+		return "", time.Time{}, fmt.Errorf("dingtalk access token failed: code=%s message=%s", resp.Code, resp.Message)
 	}
-	return resp.AccessToken, nil
+	expiresIn := resp.ExpireIn
+	if expiresIn <= 0 {
+		expiresIn = 7200
+	}
+	expiresAt := now.Add(time.Duration(expiresIn) * time.Second)
+	c.AccessToken = resp.AccessToken
+	c.AccessTokenExpiresAt = expiresAt
+	return resp.AccessToken, expiresAt, nil
 }
 
 func (c *Client) SendText(ctx context.Context, req SendTextRequest) (*SendTextResponse, error) {
@@ -108,6 +124,30 @@ func (c *Client) SendText(ctx context.Context, req SendTextRequest) (*SendTextRe
 	return &resp, nil
 }
 
+func (c *Client) SendWebhookText(ctx context.Context, sessionWebhook string, text string) (*WebhookSendResponse, error) {
+	sessionWebhook = strings.TrimSpace(sessionWebhook)
+	if sessionWebhook == "" {
+		return nil, fmt.Errorf("session_webhook is required")
+	}
+	if strings.TrimSpace(text) == "" {
+		return nil, fmt.Errorf("text is required")
+	}
+	body := map[string]any{
+		"msgtype": "text",
+		"text": map[string]string{
+			"content": text,
+		},
+	}
+	var resp WebhookSendResponse
+	if err := c.doJSONURL(ctx, http.MethodPost, sessionWebhook, body, &resp); err != nil {
+		return nil, err
+	}
+	if resp.ErrCode != 0 {
+		return nil, fmt.Errorf("session webhook send text failed: code=%d message=%s", resp.ErrCode, resp.ErrMsg)
+	}
+	return &resp, nil
+}
+
 type requestOption func(*http.Request)
 
 func withAccessToken(token string) requestOption {
@@ -117,6 +157,10 @@ func withAccessToken(token string) requestOption {
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, body any, out any, opts ...requestOption) error {
+	return c.doJSONURL(ctx, method, c.url(path), body, out, opts...)
+}
+
+func (c *Client) doJSONURL(ctx context.Context, method, targetURL string, body any, out any, opts ...requestOption) error {
 	var reader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -131,7 +175,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body any, out 
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, method, c.url(path), reader)
+	req, err := http.NewRequestWithContext(reqCtx, method, targetURL, reader)
 	if err != nil {
 		return err
 	}
@@ -157,7 +201,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body any, out 
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("%s %s failed: status=%d body=%s", method, path, resp.StatusCode, string(data))
+		return fmt.Errorf("%s %s failed: status=%d body=%s", method, targetURL, resp.StatusCode, string(data))
 	}
 	if out == nil || len(bytes.TrimSpace(data)) == 0 {
 		return nil
@@ -165,7 +209,10 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body any, out 
 	if err := json.Unmarshal(data, out); err != nil {
 		return fmt.Errorf("decode response: %w", err)
 	}
-	if response, ok := out.(*SendTextResponse); ok {
+	switch response := out.(type) {
+	case *SendTextResponse:
+		_ = json.Unmarshal(data, &response.Raw)
+	case *WebhookSendResponse:
 		_ = json.Unmarshal(data, &response.Raw)
 	}
 	return nil

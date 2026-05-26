@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestClientTokenAndSendGroupText(t *testing.T) {
@@ -118,6 +119,64 @@ func TestClientSendDirectTextWithCachedToken(t *testing.T) {
 	}
 }
 
+func TestClientTokenWithExpiryCachesToken(t *testing.T) {
+	var tokenCalls int
+	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/v1.0/oauth2/accessToken" {
+			t.Fatalf("unexpected request: %s", r.URL.Path)
+		}
+		tokenCalls++
+		return jsonResponse(map[string]any{"accessToken": "token-1", "expireIn": 7200})
+	})}
+	client := NewClient("https://api.dingtalk.test", "client-1", "secret-1", "robot-1")
+	client.HTTPClient = httpClient
+	now := time.Now().UTC()
+	token, expiresAt, err := client.TokenWithExpiry(context.Background(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "token-1" || !expiresAt.After(now) {
+		t.Fatalf("token=%q expiresAt=%s", token, expiresAt)
+	}
+	token, _, err = client.TokenWithExpiry(context.Background(), now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "token-1" || tokenCalls != 1 {
+		t.Fatalf("token=%q tokenCalls=%d", token, tokenCalls)
+	}
+}
+
+func TestClientSendWebhookText(t *testing.T) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.String() != "https://oapi.dingtalk.test/robot/sendBySession?session=s1" {
+			t.Fatalf("unexpected request: %s", r.URL.String())
+		}
+		var body struct {
+			MsgType string `json:"msgtype"`
+			Text    struct {
+				Content string `json:"content"`
+			} `json:"text"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.MsgType != "text" || body.Text.Content != "reply" {
+			t.Fatalf("body=%+v", body)
+		}
+		return jsonResponse(map[string]any{"errcode": 0, "errmsg": "ok"})
+	})}
+	client := NewClient("https://api.dingtalk.test", "client-1", "secret-1", "robot-1")
+	client.HTTPClient = httpClient
+	resp, err := client.SendWebhookText(context.Background(), "https://oapi.dingtalk.test/robot/sendBySession?session=s1", "reply")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.ErrCode != 0 || resp.Raw["errmsg"] != "ok" {
+		t.Fatalf("resp=%+v", resp)
+	}
+}
+
 func TestParseStreamEventText(t *testing.T) {
 	event, err := ParseStreamEvent([]byte(`{
 		"conversationType":"2",
@@ -141,6 +200,13 @@ func TestParseStreamEventText(t *testing.T) {
 	}
 	if got := event.DedupeKey("account-1"); got != "account-1:message:msg-1" {
 		t.Fatalf("dedupe=%q", got)
+	}
+}
+
+func TestStreamAck(t *testing.T) {
+	ack := StreamAck("delivery-1", "")
+	if ack.Code != 200 || ack.Headers["messageId"] != "delivery-1" || ack.Data != `{"response":null}` {
+		t.Fatalf("ack=%+v", ack)
 	}
 }
 

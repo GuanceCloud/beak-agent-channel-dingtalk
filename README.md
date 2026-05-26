@@ -4,7 +4,7 @@
 
 This is a Go SDK package for connecting DingTalk bot accounts to Beak Channel Gateway.
 
-The package is importable library code for Beak host. It is not a CLI. The SDK does not read user-authored runtime files, does not keep a local state directory, does not own database persistence, and does not ask users to modify files on a server. Beak host owns the client UI, credential persistence, account state persistence, DingTalk Stream connection, event routing, session creation, message writes, agent stream subscription, and connector runtime packaging. The SDK owns DingTalk connector logic: credential schema, DingTalk Stream event normalization, text message dedupe, and text delivery through DingTalk Open API.
+The package is importable library code for Beak host. It is not a CLI. The SDK does not read user-authored runtime files, does not keep a local state directory, does not own database persistence, and does not ask users to modify files on a server. Beak host owns the client UI, credential persistence, account state persistence, DingTalk Stream connection, event routing, session creation, message writes, agent stream subscription, and connector runtime packaging. The SDK owns DingTalk connector logic: credential schema, DingTalk Stream event normalization, text message dedupe, Stream ACK helper construction, token handling, and text delivery through DingTalk sessionWebhook/Open API.
 
 ## Scope
 
@@ -15,7 +15,9 @@ v1 supports:
 - Beak-host-owned credential and connector state persistence.
 - Beak-host-owned DingTalk Stream connection, with robot event bodies passed into the SDK.
 - Inbound text, markdown, and simple richText messages into Beak sessions.
-- Outbound Beak agent text replies through DingTalk robot Open API.
+- Outbound Beak agent text replies through DingTalk `sessionWebhook` when available, with Open API fallback when no valid webhook is stored.
+- Access token caching in host-owned account state for Open API fallback.
+- DingTalk Stream ACK frame helper for Beak-host-owned Stream runtimes.
 - Direct and group chat normalization.
 - One Beak session per connected bot account plus group chat.
 - One Beak session per connected bot account plus direct chat.
@@ -125,6 +127,7 @@ if result.Ignored {
 - `conversationType=2` normalized as group chat.
 - Text, markdown, and simple richText extraction.
 - Dedupe by `msgId` or Stream delivery message id.
+- `sessionWebhook`, webhook expiry, and `isInAtList` metadata capture.
 - Self-echo filtering when `chatbot_user_id` is available.
 - `sdk.Gateway.EnsureChatSession` for session creation or reuse.
 - `sdk.Gateway.CreateMessage` for Beak message writes.
@@ -143,7 +146,7 @@ _, err := connector.Send(ctx, runtime, sdk.OutboundMessage{
 })
 ```
 
-The SDK first gets an access token:
+If the latest inbound event stored a valid `sessionWebhook` for this chat, `connector.Send` replies through that webhook. Otherwise the SDK gets and caches an access token:
 
 ```text
 POST /v1.0/oauth2/accessToken
@@ -198,6 +201,8 @@ All delivery calls include:
 x-acs-dingtalk-access-token: <access_token>
 ```
 
+To force Open API delivery even when a valid `sessionWebhook` exists, set `Raw["force_openapi"]=true` on the outbound message.
+
 ## Session Rules
 
 Gateway session identity must include the connected bot account and IM platform chat identity.
@@ -246,9 +251,11 @@ Beak host stores account state. The SDK only writes through `sdk.AccountStore.Sa
 
 - `channel_link_session`: connection session for this bot account.
 - `peer_sessions`: chat identity to Beak session uuid cache.
+- `session_webhooks`: chat identity to DingTalk sessionWebhook and expiry cache.
 - `inbound_seen`: inbound dedupe keys.
 - `sent_beak_messages`: reserved outbound message dedupe state.
 - `stream_cursors`: reserved Beak stream cursors.
+- `access_token` / `access_token_expires_at`: access token cache for Open API fallback.
 - `chatbot_user_id` / `chatbot_corp_id`: bot identity observed from DingTalk events.
 
 ## Beak Host Integration

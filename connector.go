@@ -11,7 +11,7 @@ import (
 
 	"beak-agent-dingtalk/internal/dingtalk"
 	"beak-agent-dingtalk/sdk"
-	"beak-agent-dingtalk/state"
+	beakstate "beak-agent-dingtalk/state"
 )
 
 var ErrCredentialLogin = errors.New("dingtalk connector uses credential login; create channel account from CredentialSchema")
@@ -135,7 +135,50 @@ func (c Connector) Send(ctx context.Context, runtime sdk.Runtime, req sdk.Outbou
 	if err != nil {
 		return nil, err
 	}
+	accountUUID := accountKey(account)
+	store := newConnectorStateStore(runtime.AccountStore)
+	store.seed(account)
+	accountState, err := store.LoadAccount(accountUUID)
+	if err != nil {
+		return nil, err
+	}
 	client := clientFromAccount(runtime, account)
+	now := time.Now().UTC()
+	if accountState.AccessToken != "" && accountState.AccessTokenExpires.After(now.Add(5*time.Minute)) {
+		client.AccessToken = accountState.AccessToken
+		client.AccessTokenExpiresAt = accountState.AccessTokenExpires
+	}
+	if !boolValue(req.Raw["force_openapi"]) {
+		if webhook, ok := accountState.SessionWebhooks[outboundStateKey(req)]; ok && webhook.URL != "" && webhook.ExpiresAt.After(now.Add(10*time.Second)) {
+			resp, err := client.SendWebhookText(ctx, webhook.URL, req.Text)
+			if err != nil {
+				return nil, err
+			}
+			return &sdk.SendResult{
+				Platform:    Platform,
+				AccountUUID: accountUUID,
+				Raw: map[string]any{
+					"delivery_method": "session_webhook",
+					"chat_type":       req.ChatType,
+					"chat_id":         req.ChatID,
+					"response":        resp.Raw,
+				},
+			}, nil
+		}
+	}
+	if client.AccessToken == "" || !client.AccessTokenExpiresAt.After(now.Add(5*time.Minute)) {
+		token, expiresAt, err := client.TokenWithExpiry(ctx, now)
+		if err != nil {
+			return nil, err
+		}
+		accountState.AccessToken = token
+		accountState.AccessTokenExpires = expiresAt
+		if len(account.State) > 0 {
+			if err := store.SaveAccount(accountState); err != nil {
+				return nil, err
+			}
+		}
+	}
 	resp, err := client.SendText(ctx, dingtalk.SendTextRequest{
 		ChatType:    req.ChatType,
 		ChatID:      strings.TrimSpace(req.ChatID),
@@ -148,9 +191,10 @@ func (c Connector) Send(ctx context.Context, runtime sdk.Runtime, req sdk.Outbou
 	}
 	return &sdk.SendResult{
 		Platform:    Platform,
-		AccountUUID: accountKey(account),
+		AccountUUID: accountUUID,
 		MessageID:   resp.ProcessQueryKey,
 		Raw: map[string]any{
+			"delivery_method":   "openapi",
 			"process_query_key": resp.ProcessQueryKey,
 			"chat_type":         req.ChatType,
 			"chat_id":           req.ChatID,
@@ -255,6 +299,12 @@ func (c Connector) processStreamEvent(ctx context.Context, runtime sdk.Runtime, 
 	if event.ChatbotCorpID != "" {
 		state.ChatbotCorpID = event.ChatbotCorpID
 	}
+	if event.SessionWebhook != "" {
+		state.SessionWebhooks[chat.StateKey()] = beakstate.Webhook{
+			URL:       event.SessionWebhook,
+			ExpiresAt: timeFromUnixMilli(event.SessionWebhookExpiredTime),
+		}
+	}
 	if err := store.SaveAccount(state); err != nil {
 		return nil, err
 	}
@@ -275,19 +325,29 @@ func BuildInboundMessage(workspaceUUID, channelUUID, accountUUID string, event *
 		Text:          text,
 		DedupeKey:     event.DedupeKey(accountUUID),
 		Raw: map[string]any{
-			"conversation_type":   event.ConversationType,
-			"conversation_id":     event.ConversationID,
-			"conversation_title":  event.ConversationTitle,
-			"sender_id":           chat.SenderID,
-			"sender_name":         event.SenderNick,
-			"message_id":          event.MsgID,
-			"delivery_message_id": event.DeliveryMessageID,
-			"message_type":        event.MsgType,
-			"robot_code":          event.RobotCode,
-			"chatbot_user_id":     event.ChatbotUserID,
-			"chatbot_corp_id":     event.ChatbotCorpID,
+			"conversation_type":          event.ConversationType,
+			"conversation_id":            event.ConversationID,
+			"conversation_title":         event.ConversationTitle,
+			"sender_id":                  chat.SenderID,
+			"sender_name":                event.SenderNick,
+			"message_id":                 event.MsgID,
+			"delivery_message_id":        event.DeliveryMessageID,
+			"message_type":               event.MsgType,
+			"robot_code":                 event.RobotCode,
+			"session_webhook":            event.SessionWebhook,
+			"session_webhook_expires_at": timeFromUnixMilli(event.SessionWebhookExpiredTime),
+			"is_in_at_list":              event.IsInAtList,
+			"chatbot_user_id":            event.ChatbotUserID,
+			"chatbot_corp_id":            event.ChatbotCorpID,
 		},
 	}
+}
+
+func outboundStateKey(req sdk.OutboundMessage) string {
+	if req.ChatType == sdk.ChatTypeGroup {
+		return sdk.ChatTypeGroup + ":" + strings.TrimSpace(req.ChatID)
+	}
+	return strings.TrimSpace(req.ChatID)
 }
 
 func runtimeAccountCandidates(runtime sdk.Runtime) []sdk.ChannelAccount {
@@ -359,14 +419,14 @@ func baseURLFromCredential(credential map[string]any) string {
 
 type connectorStateStore struct {
 	mu           sync.Mutex
-	accounts     map[string]*state.AccountState
+	accounts     map[string]*beakstate.AccountState
 	sdkAccounts  map[string]sdk.ChannelAccount
 	accountStore sdk.AccountStore
 }
 
 func newConnectorStateStore(accountStore sdk.AccountStore) *connectorStateStore {
 	return &connectorStateStore{
-		accounts:     make(map[string]*state.AccountState),
+		accounts:     make(map[string]*beakstate.AccountState),
 		sdkAccounts:  make(map[string]sdk.ChannelAccount),
 		accountStore: accountStore,
 	}
@@ -384,20 +444,20 @@ func (s *connectorStateStore) seed(account sdk.ChannelAccount) {
 	s.sdkAccounts[accountID] = account
 }
 
-func (s *connectorStateStore) LoadAccount(accountID string) (*state.AccountState, error) {
+func (s *connectorStateStore) LoadAccount(accountID string) (*beakstate.AccountState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if account, ok := s.accounts[accountID]; ok {
 		return account, nil
 	}
-	account := &state.AccountState{AccountID: accountID}
+	account := &beakstate.AccountState{AccountID: accountID}
 	account.EnsureMaps()
 	s.accounts[accountID] = account
 	return account, nil
 }
 
-func (s *connectorStateStore) SaveAccount(account *state.AccountState) error {
-	if err := state.TouchAccount(account); err != nil {
+func (s *connectorStateStore) SaveAccount(account *beakstate.AccountState) error {
+	if err := beakstate.TouchAccount(account); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -413,16 +473,19 @@ func (s *connectorStateStore) SaveAccount(account *state.AccountState) error {
 	return nil
 }
 
-func sdkAccountToState(account sdk.ChannelAccount) state.AccountState {
-	out := state.AccountState{
+func sdkAccountToState(account sdk.ChannelAccount) beakstate.AccountState {
+	out := beakstate.AccountState{
 		AccountID:          accountKey(account),
 		ClientID:           stringValue(account.Credential["client_id"]),
 		RobotCode:          firstString(account.Credential["robot_code"], account.Credential["client_id"]),
 		BaseURL:            baseURLFromCredential(account.Credential),
+		AccessToken:        stringValue(account.State["access_token"]),
+		AccessTokenExpires: timeValue(account.State["access_token_expires_at"]),
 		ChatbotUserID:      firstString(account.Credential["chatbot_user_id"], account.State["chatbot_user_id"]),
 		ChatbotCorpID:      firstString(account.Credential["chatbot_corp_id"], account.State["chatbot_corp_id"]),
 		ChannelLinkSession: stringValue(account.State["channel_link_session"]),
 		PeerSessions:       stringMap(account.State["peer_sessions"]),
+		SessionWebhooks:    webhookMap(account.State["session_webhooks"]),
 		InboundSeen:        stringMap(account.State["inbound_seen"]),
 		SentBeakMessages:   stringMap(account.State["sent_beak_messages"]),
 		StreamCursors:      stringMap(account.State["stream_cursors"]),
@@ -431,7 +494,7 @@ func sdkAccountToState(account sdk.ChannelAccount) state.AccountState {
 	return out
 }
 
-func accountStateToSDK(account state.AccountState, existing sdk.ChannelAccount) sdk.ChannelAccount {
+func accountStateToSDK(account beakstate.AccountState, existing sdk.ChannelAccount) sdk.ChannelAccount {
 	if existing.UUID == "" {
 		existing.UUID = account.AccountID
 	}
@@ -440,16 +503,75 @@ func accountStateToSDK(account state.AccountState, existing sdk.ChannelAccount) 
 		existing.Credential = map[string]any{}
 	}
 	existing.State = map[string]any{
-		"channel_link_session": account.ChannelLinkSession,
-		"peer_sessions":        account.PeerSessions,
-		"inbound_seen":         account.InboundSeen,
-		"sent_beak_messages":   account.SentBeakMessages,
-		"stream_cursors":       account.StreamCursors,
-		"chatbot_user_id":      account.ChatbotUserID,
-		"chatbot_corp_id":      account.ChatbotCorpID,
-		"updated_at":           account.UpdatedAt,
+		"channel_link_session":    account.ChannelLinkSession,
+		"peer_sessions":           account.PeerSessions,
+		"session_webhooks":        account.SessionWebhooks,
+		"inbound_seen":            account.InboundSeen,
+		"sent_beak_messages":      account.SentBeakMessages,
+		"stream_cursors":          account.StreamCursors,
+		"access_token":            account.AccessToken,
+		"access_token_expires_at": account.AccessTokenExpires,
+		"chatbot_user_id":         account.ChatbotUserID,
+		"chatbot_corp_id":         account.ChatbotCorpID,
+		"updated_at":              account.UpdatedAt,
 	}
 	return existing
+}
+
+func webhookMap(value any) map[string]beakstate.Webhook {
+	out := make(map[string]beakstate.Webhook)
+	switch typed := value.(type) {
+	case map[string]beakstate.Webhook:
+		for key, item := range typed {
+			out[key] = item
+		}
+	case map[string]any:
+		for key, item := range typed {
+			switch webhook := item.(type) {
+			case beakstate.Webhook:
+				out[key] = webhook
+			case map[string]any:
+				out[key] = beakstate.Webhook{
+					URL:       stringValue(webhook["url"]),
+					ExpiresAt: timeValue(webhook["expires_at"]),
+				}
+			case json.RawMessage:
+				var parsed beakstate.Webhook
+				if err := json.Unmarshal(webhook, &parsed); err == nil {
+					out[key] = parsed
+				}
+			}
+		}
+	case json.RawMessage:
+		_ = json.Unmarshal(typed, &out)
+	}
+	return out
+}
+
+func timeValue(value any) time.Time {
+	switch typed := value.(type) {
+	case time.Time:
+		return typed
+	case string:
+		if typed == "" {
+			return time.Time{}
+		}
+		parsed, _ := time.Parse(time.RFC3339Nano, typed)
+		return parsed
+	case json.RawMessage:
+		var text string
+		if err := json.Unmarshal(typed, &text); err == nil {
+			return timeValue(text)
+		}
+	}
+	return time.Time{}
+}
+
+func timeFromUnixMilli(ms int64) time.Time {
+	if ms <= 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(ms).UTC()
 }
 
 func stringMap(value any) map[string]string {
@@ -487,6 +609,8 @@ func boolValue(value any) bool {
 	switch typed := value.(type) {
 	case bool:
 		return typed
+	case string:
+		return strings.EqualFold(strings.TrimSpace(typed), "true")
 	default:
 		return false
 	}

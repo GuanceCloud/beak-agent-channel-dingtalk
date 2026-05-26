@@ -4,7 +4,7 @@
 
 这是一个 Go SDK 包，用于把 Beak Channel Gateway 接入钉钉 bot account。
 
-本仓库提供的是可被 Beak host `import` 的库代码，不是命令行工具。SDK 不读取用户编写的运行时配置文件，不维护本地状态目录，不拥有数据库持久化，也不要求用户登录服务器修改文件。Beak host 负责客户端 UI、credential 持久化、account state 持久化、DingTalk Stream 连接、事件路由、session 创建、message 写入、agent stream 订阅和 connector runtime 打包。SDK 只负责钉钉 connector 逻辑：credential schema、钉钉 Stream 事件标准化、文本消息去重，以及通过钉钉 Open API 发送文本消息。
+本仓库提供的是可被 Beak host `import` 的库代码，不是命令行工具。SDK 不读取用户编写的运行时配置文件，不维护本地状态目录，不拥有数据库持久化，也不要求用户登录服务器修改文件。Beak host 负责客户端 UI、credential 持久化、account state 持久化、DingTalk Stream 连接、事件路由、session 创建、message 写入、agent stream 订阅和 connector runtime 打包。SDK 只负责钉钉 connector 逻辑：credential schema、钉钉 Stream 事件标准化、文本消息去重、Stream ACK helper、token 处理，以及通过钉钉 sessionWebhook/Open API 发送文本消息。
 
 ## 范围
 
@@ -15,7 +15,9 @@ v1 支持：
 - 由 Beak host 保存 credential 和 connector state。
 - 由 Beak host 建立 DingTalk Stream 长连接，并把收到的 robot event body 传给 SDK。
 - 文本、markdown、简单 richText 入站到 Beak session。
-- Beak agent 文本输出通过钉钉 robot Open API 回发到钉钉。
+- Beak agent 文本输出优先通过钉钉 `sessionWebhook` 回发；没有可用 webhook 时 fallback 到 robot Open API。
+- Open API fallback 的 access token 会缓存在 host-owned account state 中。
+- 提供 DingTalk Stream ACK frame helper，供 Beak-host-owned Stream runtime 使用。
 - 单聊和群聊标准化。
 - 一个已连接 bot account 中的一个群聊对应一个 Beak session。
 - 一个已连接 bot account 中的一个单聊对应一个 Beak session。
@@ -125,6 +127,7 @@ if result.Ignored {
 - `conversationType=2` 标准化为 group chat。
 - text、markdown、简单 richText 文本提取。
 - 按 `msgId` 或 Stream delivery message id 去重。
+- 捕获 `sessionWebhook`、webhook 过期时间和 `isInAtList` 元数据。
 - 配置 `chatbot_user_id` 时过滤 self echo。
 - 通过 `sdk.Gateway.EnsureChatSession` 创建或复用 session。
 - 通过 `sdk.Gateway.CreateMessage` 写入 Beak message。
@@ -143,7 +146,7 @@ _, err := connector.Send(ctx, runtime, sdk.OutboundMessage{
 })
 ```
 
-SDK 会先获取 access token：
+如果最近一次入站事件为该 chat 存过有效 `sessionWebhook`，`connector.Send` 会优先用该 webhook 回复。否则 SDK 会获取并缓存 access token：
 
 ```text
 POST /v1.0/oauth2/accessToken
@@ -198,6 +201,8 @@ POST /v1.0/robot/oToMessages/batchSend
 x-acs-dingtalk-access-token: <access_token>
 ```
 
+如果需要强制走 Open API，即使当前 chat 有可用 `sessionWebhook`，可以在 outbound message 设置 `Raw["force_openapi"]=true`。
+
 ## Session 规则
 
 Gateway session identity 必须包含已连接 bot account 和 IM 平台 chat identity。
@@ -246,9 +251,11 @@ Beak host 保存 account state，SDK 只通过 `sdk.AccountStore.SaveChannelAcco
 
 - `channel_link_session`：该 bot account 对应的连接 session。
 - `peer_sessions`：chat identity 到 Beak session uuid 的缓存。
+- `session_webhooks`：chat identity 到钉钉 sessionWebhook 和过期时间的缓存。
 - `inbound_seen`：入站消息 dedupe key。
 - `sent_beak_messages`：预留给出站 message dedupe。
 - `stream_cursors`：预留给 Beak stream cursor。
+- `access_token` / `access_token_expires_at`：Open API fallback 使用的 access token 缓存。
 - `chatbot_user_id` / `chatbot_corp_id`：从钉钉事件中观察到的 bot identity。
 
 ## Beak Host 集成步骤
