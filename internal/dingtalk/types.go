@@ -38,21 +38,29 @@ type SendTextResponse struct {
 	Raw             map[string]any `json:"-"`
 }
 
+type WebhookSendResponse struct {
+	ErrCode int            `json:"errcode"`
+	ErrMsg  string         `json:"errmsg"`
+	Raw     map[string]any `json:"-"`
+}
+
 type StreamEvent struct {
-	ConversationType  string `json:"conversationType"`
-	ConversationID    string `json:"conversationId"`
-	ConversationTitle string `json:"conversationTitle"`
-	SenderStaffID     string `json:"senderStaffId"`
-	SenderID          string `json:"senderId"`
-	SenderNick        string `json:"senderNick"`
-	ChatbotUserID     string `json:"chatbotUserId"`
-	ChatbotCorpID     string `json:"chatbotCorpId"`
-	SessionWebhook    string `json:"sessionWebhook"`
-	RobotCode         string `json:"robotCode"`
-	MsgID             string `json:"msgId"`
-	MsgType           string `json:"msgtype"`
-	DeliveryMessageID string
-	Raw               map[string]any
+	ConversationType          string `json:"conversationType"`
+	ConversationID            string `json:"conversationId"`
+	ConversationTitle         string `json:"conversationTitle"`
+	SenderStaffID             string `json:"senderStaffId"`
+	SenderID                  string `json:"senderId"`
+	SenderNick                string `json:"senderNick"`
+	ChatbotUserID             string `json:"chatbotUserId"`
+	ChatbotCorpID             string `json:"chatbotCorpId"`
+	SessionWebhook            string `json:"sessionWebhook"`
+	SessionWebhookExpiredTime int64  `json:"sessionWebhookExpiredTime"`
+	RobotCode                 string `json:"robotCode"`
+	MsgID                     string `json:"msgId"`
+	MsgType                   string `json:"msgtype"`
+	IsInAtList                bool   `json:"isInAtList"`
+	DeliveryMessageID         string
+	Raw                       map[string]any
 }
 
 type ChatIdentity struct {
@@ -88,20 +96,22 @@ func ParseStreamEvent(data []byte) (*StreamEvent, error) {
 		return nil, fmt.Errorf("decode dingtalk stream event: %w", err)
 	}
 	event := &StreamEvent{
-		ConversationType:  stringValue(raw["conversationType"]),
-		ConversationID:    stringValue(raw["conversationId"]),
-		ConversationTitle: stringValue(raw["conversationTitle"]),
-		SenderStaffID:     stringValue(raw["senderStaffId"]),
-		SenderID:          stringValue(raw["senderId"]),
-		SenderNick:        stringValue(raw["senderNick"]),
-		ChatbotUserID:     stringValue(raw["chatbotUserId"]),
-		ChatbotCorpID:     stringValue(raw["chatbotCorpId"]),
-		SessionWebhook:    stringValue(raw["sessionWebhook"]),
-		RobotCode:         stringValue(raw["robotCode"]),
-		MsgID:             stringValue(raw["msgId"]),
-		MsgType:           stringValue(raw["msgtype"]),
-		DeliveryMessageID: deliveryMessageID,
-		Raw:               raw,
+		ConversationType:          stringValue(raw["conversationType"]),
+		ConversationID:            stringValue(raw["conversationId"]),
+		ConversationTitle:         stringValue(raw["conversationTitle"]),
+		SenderStaffID:             stringValue(raw["senderStaffId"]),
+		SenderID:                  stringValue(raw["senderId"]),
+		SenderNick:                stringValue(raw["senderNick"]),
+		ChatbotUserID:             stringValue(raw["chatbotUserId"]),
+		ChatbotCorpID:             stringValue(raw["chatbotCorpId"]),
+		SessionWebhook:            stringValue(raw["sessionWebhook"]),
+		SessionWebhookExpiredTime: int64Value(raw["sessionWebhookExpiredTime"]),
+		RobotCode:                 stringValue(raw["robotCode"]),
+		MsgID:                     stringValue(raw["msgId"]),
+		MsgType:                   stringValue(raw["msgtype"]),
+		IsInAtList:                boolValue(raw["isInAtList"]),
+		DeliveryMessageID:         deliveryMessageID,
+		Raw:                       raw,
 	}
 	if event.MsgType == "" {
 		event.MsgType = "text"
@@ -174,6 +184,28 @@ func (e StreamEvent) DedupeKey(accountUUID string) string {
 	}
 	chat := e.ChatIdentity()
 	return accountUUID + ":chat:" + chat.ChatType + ":" + chat.ChatID + ":sender:" + chat.SenderID
+}
+
+type StreamFrameResponse struct {
+	Code    int               `json:"code"`
+	Headers map[string]string `json:"headers"`
+	Message string            `json:"message"`
+	Data    string            `json:"data"`
+}
+
+func StreamAck(messageID string, data string) StreamFrameResponse {
+	if strings.TrimSpace(data) == "" {
+		data = `{"response":null}`
+	}
+	return StreamFrameResponse{
+		Code:    200,
+		Message: "OK",
+		Headers: map[string]string{
+			"contentType": "application/json",
+			"messageId":   messageID,
+		},
+		Data: data,
+	}
 }
 
 func pathString(raw map[string]any, path ...string) string {
@@ -265,5 +297,36 @@ func stringValue(value any) string {
 		return typed.String()
 	default:
 		return fmt.Sprint(typed)
+	}
+}
+
+func int64Value(value any) int64 {
+	switch typed := value.(type) {
+	case int64:
+		return typed
+	case int:
+		return int64(typed)
+	case float64:
+		return int64(typed)
+	case json.Number:
+		item, _ := typed.Int64()
+		return item
+	case string:
+		var item int64
+		_, _ = fmt.Sscan(strings.TrimSpace(typed), &item)
+		return item
+	default:
+		return 0
+	}
+}
+
+func boolValue(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		return strings.EqualFold(strings.TrimSpace(typed), "true")
+	default:
+		return false
 	}
 }

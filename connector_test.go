@@ -86,7 +86,9 @@ func TestDingTalkConnectorEventCreatesMessageAndDedupes(t *testing.T) {
 		"msgtype":"text",
 		"text":{"content":"hello group"},
 		"chatbotUserId":"bot-1",
-		"chatbotCorpId":"corp-1"
+		"chatbotCorpId":"corp-1",
+		"sessionWebhook":"https://oapi.dingtalk.test/robot/sendBySession?session=s1",
+		"sessionWebhookExpiredTime":4102444800000
 	}`)
 	runtime := sdk.Runtime{
 		WorkspaceUUID: "workspace-1",
@@ -125,6 +127,9 @@ func TestDingTalkConnectorEventCreatesMessageAndDedupes(t *testing.T) {
 	if state["chatbot_user_id"] != "bot-1" || state["chatbot_corp_id"] != "corp-1" {
 		t.Fatalf("stored state=%+v", state)
 	}
+	if state["session_webhooks"] == nil {
+		t.Fatalf("missing session_webhooks state=%+v", state)
+	}
 	account.State = state
 	runtime.Account = account
 	duplicate, err := connector.HandleEvent(context.Background(), runtime, account, body)
@@ -138,6 +143,53 @@ func TestDingTalkConnectorEventCreatesMessageAndDedupes(t *testing.T) {
 	defer gateway.mu.Unlock()
 	if len(gateway.messages) != 1 {
 		t.Fatalf("duplicate created message=%+v", gateway.messages)
+	}
+}
+
+func TestDingTalkConnectorSendUsesSessionWebhook(t *testing.T) {
+	var sawWebhook bool
+	httpClient := &http.Client{Transport: testRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		sawWebhook = true
+		if r.URL.String() != "https://oapi.dingtalk.test/robot/sendBySession?session=s1" {
+			t.Fatalf("unexpected request: %s", r.URL.String())
+		}
+		var body struct {
+			MsgType string `json:"msgtype"`
+			Text    struct {
+				Content string `json:"content"`
+			} `json:"text"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.MsgType != "text" || body.Text.Content != "reply" {
+			t.Fatalf("body=%+v", body)
+		}
+		return testJSONResponse(map[string]any{"errcode": 0, "errmsg": "ok"})
+	})}
+	account := sdkAccount("account-1", "client-1", "secret-1", "https://api.dingtalk.test")
+	account.State = map[string]any{
+		"session_webhooks": map[string]any{
+			"group:cid-group": map[string]any{
+				"url":        "https://oapi.dingtalk.test/robot/sendBySession?session=s1",
+				"expires_at": time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano),
+			},
+		},
+	}
+	result, err := NewConnector().Send(context.Background(), sdk.Runtime{
+		HTTPClient: httpClient,
+		Account:    account,
+	}, sdk.OutboundMessage{
+		AccountUUID: "account-1",
+		ChatType:    sdk.ChatTypeGroup,
+		ChatID:      "cid-group",
+		Text:        "reply",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sawWebhook || result.Raw["delivery_method"] != "session_webhook" {
+		t.Fatalf("sawWebhook=%v result=%+v", sawWebhook, result)
 	}
 }
 
