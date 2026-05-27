@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"beak-agent-dingtalk/internal/dingtalk"
-	"beak-agent-dingtalk/sdk"
-	beakstate "beak-agent-dingtalk/state"
+	"github.com/GuanceCloud/beak-agent-channel-dingtalk/internal/dingtalk"
+	"github.com/GuanceCloud/beak-agent-channel-dingtalk/sdk"
+	beakstate "github.com/GuanceCloud/beak-agent-channel-dingtalk/state"
 )
 
 var ErrCredentialLogin = errors.New("dingtalk connector uses credential login; create channel account from CredentialSchema")
