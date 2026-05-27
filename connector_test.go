@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"beak-agent-dingtalk/sdk"
+	"github.com/GuanceCloud/beak-agent-channel-dingtalk/sdk"
 )
 
 func TestDingTalkConnectorMetadataAndSchema(t *testing.T) {

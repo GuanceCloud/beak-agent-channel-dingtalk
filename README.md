@@ -45,8 +45,8 @@ v1 does not support:
 
 ```go
 import (
-	beakdingtalk "beak-agent-dingtalk"
-	"beak-agent-dingtalk/sdk"
+	beakdingtalk "github.com/GuanceCloud/beak-agent-channel-dingtalk"
+	"github.com/GuanceCloud/beak-agent-channel-dingtalk/sdk"
 )
 
 func DingTalkConnector() sdk.Connector {
