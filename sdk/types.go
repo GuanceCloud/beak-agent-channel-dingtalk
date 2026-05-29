@@ -139,17 +139,25 @@ type LoginStatus struct {
 }
 
 type InboundMessage struct {
-	WorkspaceUUID string         `json:"workspace_uuid"`
-	Platform      string         `json:"platform"`
-	AccountUUID   string         `json:"account_uuid"`
-	ChannelUUID   string         `json:"channel_uuid"`
-	ChatType      string         `json:"chat_type"`
-	ChatID        string         `json:"chat_id"`
-	SenderID      string         `json:"sender_id"`
-	MessageID     string         `json:"message_id,omitempty"`
-	Text          string         `json:"text"`
-	DedupeKey     string         `json:"dedupe_key,omitempty"`
-	Raw           map[string]any `json:"raw,omitempty"`
+	WorkspaceUUID string            `json:"workspace_uuid"`
+	Platform      string            `json:"platform"`
+	AccountUUID   string            `json:"account_uuid"`
+	ChannelUUID   string            `json:"channel_uuid"`
+	ChatType      string            `json:"chat_type"`
+	ChatID        string            `json:"chat_id"`
+	SenderID      string            `json:"sender_id"`
+	MessageID     string            `json:"message_id,omitempty"`
+	Text          string            `json:"text"`
+	DedupeKey     string            `json:"dedupe_key,omitempty"`
+	Mentions      []MentionIdentity `json:"mentions,omitempty"`
+	MentionedMe   bool              `json:"mentioned_me,omitempty"`
+	Raw           map[string]any    `json:"raw,omitempty"`
+}
+
+type MentionIdentity struct {
+	ID          string `json:"id"`
+	IDType      string `json:"id_type,omitempty"`
+	DisplayName string `json:"display_name,omitempty"`
 }
 
 type OutboundMessage struct {

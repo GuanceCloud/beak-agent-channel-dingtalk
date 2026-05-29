@@ -127,7 +127,7 @@ if result.Ignored {
 - `conversationType=2` 标准化为 group chat。
 - text、markdown、简单 richText 文本提取。
 - 按 `msgId` 或 Stream delivery message id 去重。
-- 捕获 `sessionWebhook`、webhook 过期时间和 `isInAtList` 元数据。
+- 捕获 `sessionWebhook`、webhook 过期时间和 `isInAtList` 元数据，并标准化映射 `mentioned_me`。
 - 配置 `chatbot_user_id` 时过滤 self echo。
 - 通过 `sdk.Gateway.EnsureChatSession` 创建或复用 session。
 - 通过 `sdk.Gateway.CreateMessage` 写入 Beak message。
