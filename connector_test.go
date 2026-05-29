@@ -84,9 +84,11 @@ func TestDingTalkConnectorEventCreatesMessageAndDedupes(t *testing.T) {
 		"senderNick":"Alice",
 		"msgId":"msg-1",
 		"msgtype":"text",
+		"isInAtList":true,
 		"text":{"content":"hello group"},
 		"chatbotUserId":"bot-1",
 		"chatbotCorpId":"corp-1",
+		"robotCode":"robot-1",
 		"sessionWebhook":"https://oapi.dingtalk.test/robot/sendBySession?session=s1",
 		"sessionWebhookExpiredTime":4102444800000
 	}`)
@@ -106,6 +108,9 @@ func TestDingTalkConnectorEventCreatesMessageAndDedupes(t *testing.T) {
 	}
 	if result.Inbound == nil || result.Inbound.ChatType != sdk.ChatTypeGroup || result.Inbound.ChatID != "cid-group" || result.Inbound.AccountUUID != "account-1" {
 		t.Fatalf("inbound=%+v", result.Inbound)
+	}
+	if !result.Inbound.MentionedMe || len(result.Inbound.Mentions) != 2 {
+		t.Fatalf("inbound mentions=%+v mentioned_me=%v", result.Inbound.Mentions, result.Inbound.MentionedMe)
 	}
 	gateway.mu.Lock()
 	if len(gateway.chatSessions) != 1 {

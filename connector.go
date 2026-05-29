@@ -313,6 +313,7 @@ func (c Connector) processStreamEvent(ctx context.Context, runtime sdk.Runtime, 
 
 func BuildInboundMessage(workspaceUUID, channelUUID, accountUUID string, event *dingtalk.StreamEvent, text string) sdk.InboundMessage {
 	chat := event.ChatIdentity()
+	mentions := dingtalkMentionIdentities(event)
 	return sdk.InboundMessage{
 		WorkspaceUUID: workspaceUUID,
 		Platform:      Platform,
@@ -324,6 +325,8 @@ func BuildInboundMessage(workspaceUUID, channelUUID, accountUUID string, event *
 		MessageID:     event.MsgID,
 		Text:          text,
 		DedupeKey:     event.DedupeKey(accountUUID),
+		Mentions:      mentions,
+		MentionedMe:   event.IsInAtList,
 		Raw: map[string]any{
 			"conversation_type":          event.ConversationType,
 			"conversation_id":            event.ConversationID,
@@ -341,6 +344,40 @@ func BuildInboundMessage(workspaceUUID, channelUUID, accountUUID string, event *
 			"chatbot_corp_id":            event.ChatbotCorpID,
 		},
 	}
+}
+
+func dingtalkMentionIdentities(event *dingtalk.StreamEvent) []sdk.MentionIdentity {
+	if event == nil || !event.IsInAtList {
+		return nil
+	}
+	out := make([]sdk.MentionIdentity, 0, 2)
+	if id := strings.TrimSpace(event.ChatbotUserID); id != "" {
+		out = append(out, sdk.MentionIdentity{ID: id, IDType: "chatbot_user_id"})
+	}
+	if id := strings.TrimSpace(event.RobotCode); id != "" {
+		out = append(out, sdk.MentionIdentity{ID: id, IDType: "robot_code"})
+	}
+	return uniqueMentionIdentities(out)
+}
+
+func uniqueMentionIdentities(mentions []sdk.MentionIdentity) []sdk.MentionIdentity {
+	seen := make(map[string]struct{}, len(mentions))
+	out := make([]sdk.MentionIdentity, 0, len(mentions))
+	for _, mention := range mentions {
+		mention.ID = strings.TrimSpace(mention.ID)
+		mention.IDType = strings.TrimSpace(mention.IDType)
+		mention.DisplayName = strings.TrimSpace(mention.DisplayName)
+		if mention.ID == "" {
+			continue
+		}
+		key := mention.IDType + "\x00" + mention.ID
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, mention)
+	}
+	return out
 }
 
 func outboundStateKey(req sdk.OutboundMessage) string {

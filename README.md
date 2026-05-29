@@ -127,7 +127,7 @@ if result.Ignored {
 - `conversationType=2` normalized as group chat.
 - Text, markdown, and simple richText extraction.
 - Dedupe by `msgId` or Stream delivery message id.
-- `sessionWebhook`, webhook expiry, and `isInAtList` metadata capture.
+- `sessionWebhook`, webhook expiry, `isInAtList` metadata capture, and standard `mentioned_me` mapping.
 - Self-echo filtering when `chatbot_user_id` is available.
 - `sdk.Gateway.EnsureChatSession` for session creation or reuse.
 - `sdk.Gateway.CreateMessage` for Beak message writes.
