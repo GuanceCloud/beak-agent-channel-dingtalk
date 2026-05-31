@@ -15,7 +15,7 @@ v1 支持：
 - 由 Beak host 保存 credential 和 connector state。
 - 由 Beak host 建立 DingTalk Stream 长连接，并把收到的 robot event body 传给 SDK。
 - 文本、markdown、简单 richText 入站到 Beak session。
-- Beak agent 文本输出优先通过钉钉 `sessionWebhook` 回发；没有可用 webhook 时 fallback 到 robot Open API。
+- Beak agent 文本输出优先通过钉钉 `sessionWebhook` 回发；没有可用 `sessionWebhook` 时 fallback 到 robot Open API。
 - Open API fallback 的 access token 会缓存在 host-owned account state 中。
 - 提供 DingTalk Stream ACK frame helper，供 Beak-host-owned Stream runtime 使用。
 - 单聊和群聊标准化。
@@ -32,6 +32,14 @@ v1 不支持：
 - 修改 Beak host 代码。
 - 把钉钉 connector 做成 CLI。
 - 让 SDK 维护本地配置文件或本地状态目录。
+
+## OpenClaw 参考实现对齐
+
+上游 [`DingTalk-Real-AI/dingtalk-openclaw-connector`](https://github.com/DingTalk-Real-AI/dingtalk-openclaw-connector) 的连接层使用 `dingtalk-stream` / `DWClient`。Stream callback 会先 ACK，robot event data 再交给 message handler；最近一次事件里的 `sessionWebhook` 会在可用时用于回复链路的文本发送。
+
+本 Go SDK 保留同样的平台契约，但把长连接归属放到 Beak host。SDK 通过 `HandleEvent` 接收 event body，把 `sessionWebhook` 存入 account state，并在 `Send` 时优先使用它；没有可用 `sessionWebhook` 时再 fallback 到钉钉 robot Open API。
+
+`sessionWebhook` 是钉钉提供的临时回复 URL，不是 Beak 入站 webhook endpoint。
 
 ## 包结构
 
@@ -96,7 +104,7 @@ runtime := sdk.Runtime{
 }
 ```
 
-`Start(ctx, runtime)` 负责校验 account wiring，并为每个 account 创建或复用 channel-link session。钉钉入站事件由 Beak host 的 DingTalk Stream runtime 收到后调用 `HandleEvent`。`Start` 不启动 CLI，不读取配置文件，也不拥有本地事件服务器。
+`Start(ctx, runtime)` 负责校验 account wiring，为每个 account 创建或复用 channel-link session，保存 account state，然后返回。钉钉入站事件由 Beak host 的 DingTalk Stream runtime 收到后调用 `HandleEvent`。`Start` 不启动 CLI，不读取配置文件，不订阅 Beak agent stream，也不拥有本地事件服务器。
 
 ## DingTalk Stream 事件处理
 
@@ -127,7 +135,7 @@ if result.Ignored {
 - `conversationType=2` 标准化为 group chat。
 - text、markdown、简单 richText 文本提取。
 - 按 `msgId` 或 Stream delivery message id 去重。
-- 捕获 `sessionWebhook`、webhook 过期时间和 `isInAtList` 元数据，并标准化映射 `mentioned_me`。
+- 捕获 `sessionWebhook`、`sessionWebhook` 过期时间和 `isInAtList` 元数据，并标准化映射 `mentioned_me`。
 - 配置 `chatbot_user_id` 时过滤 self echo。
 - 通过 `sdk.Gateway.EnsureChatSession` 创建或复用 session。
 - 通过 `sdk.Gateway.CreateMessage` 写入 Beak message。
@@ -146,7 +154,7 @@ _, err := connector.Send(ctx, runtime, sdk.OutboundMessage{
 })
 ```
 
-如果最近一次入站事件为该 chat 存过有效 `sessionWebhook`，`connector.Send` 会优先用该 webhook 回复。否则 SDK 会获取并缓存 access token：
+如果最近一次入站事件为该 chat 存过有效 `sessionWebhook`，`connector.Send` 会优先用该 `sessionWebhook` 回复。否则 SDK 会获取并缓存 access token：
 
 ```text
 POST /v1.0/oauth2/accessToken
@@ -247,7 +255,7 @@ source_id=dingtalk:account_b:group:cid_group
 
 ## State 规则
 
-Beak host 保存 account state，SDK 只通过 `sdk.AccountStore.SaveChannelAccountState` 回写：
+Beak host 保存 account state，SDK 通过 `sdk.AccountStore` 读取并回写：
 
 - `channel_link_session`：该 bot account 对应的连接 session。
 - `peer_sessions`：chat identity 到 Beak session uuid 的缓存。

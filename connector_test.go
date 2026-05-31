@@ -3,7 +3,6 @@ package beakdingtalk
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -15,8 +14,10 @@ import (
 )
 
 func TestDingTalkConnectorMetadataAndSchema(t *testing.T) {
-	connector := NewConnector()
-	var _ sdk.Connector = connector
+	var connector sdk.Connector = NewConnector()
+	if _, ok := connector.(EventConnector); !ok {
+		t.Fatal("NewConnector should expose EventConnector for host-owned DingTalk Stream routing")
+	}
 
 	metadata := connector.Metadata()
 	if metadata.ID != ID || metadata.Platform != Platform || metadata.Label != "DingTalk" {
@@ -44,20 +45,27 @@ func TestDingTalkConnectorMetadataAndSchema(t *testing.T) {
 	}
 }
 
+func newTestEventConnector(t *testing.T) EventConnector {
+	t.Helper()
+	connector, ok := NewConnector().(EventConnector)
+	if !ok {
+		t.Fatal("NewConnector should expose EventConnector")
+	}
+	return connector
+}
+
 func TestDingTalkConnectorStartEnsuresChannelLink(t *testing.T) {
 	connector := NewConnector()
 	gateway := &fakeSDKGateway{}
 	store := newFakeSDKAccountStore()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
-	defer cancel()
-	err := connector.Start(ctx, sdk.Runtime{
+	err := connector.Start(context.Background(), sdk.Runtime{
 		WorkspaceUUID: "workspace-1",
 		Channel:       sdk.Channel{UUID: "channel-1", WorkspaceUUID: "workspace-1", Platform: Platform},
 		Account:       sdkAccount("account-1", "client-1", "secret-1", ""),
 		Gateway:       gateway,
 		AccountStore:  store,
 	})
-	if !errors.Is(err, context.DeadlineExceeded) {
+	if err != nil {
 		t.Fatalf("Start error=%v", err)
 	}
 	if gateway.channelPlatform != Platform {
@@ -72,7 +80,7 @@ func TestDingTalkConnectorStartEnsuresChannelLink(t *testing.T) {
 }
 
 func TestDingTalkConnectorEventCreatesMessageAndDedupes(t *testing.T) {
-	connector := NewConnector()
+	connector := newTestEventConnector(t)
 	gateway := &fakeSDKGateway{}
 	store := newFakeSDKAccountStore()
 	account := sdkAccount("account-1", "client-1", "secret-1", "")
@@ -85,7 +93,7 @@ func TestDingTalkConnectorEventCreatesMessageAndDedupes(t *testing.T) {
 		"msgId":"msg-1",
 		"msgtype":"text",
 		"isInAtList":true,
-		"text":{"content":"hello group"},
+		"text":{"content":"hello group","at":{"atUserIds":["staff-2"],"atDingtalkIds":["ding-1"],"atMobiles":["13800000000"],"isAtAll":true}},
 		"chatbotUserId":"bot-1",
 		"chatbotCorpId":"corp-1",
 		"robotCode":"robot-1",
@@ -109,8 +117,8 @@ func TestDingTalkConnectorEventCreatesMessageAndDedupes(t *testing.T) {
 	if result.Inbound == nil || result.Inbound.ChatType != sdk.ChatTypeGroup || result.Inbound.ChatID != "cid-group" || result.Inbound.AccountUUID != "account-1" {
 		t.Fatalf("inbound=%+v", result.Inbound)
 	}
-	if !result.Inbound.MentionedMe || len(result.Inbound.Mentions) != 2 {
-		t.Fatalf("inbound mentions=%+v mentioned_me=%v", result.Inbound.Mentions, result.Inbound.MentionedMe)
+	if !result.Inbound.MentionedMe || !result.Inbound.MentionAll || len(result.Inbound.Mentions) != 6 {
+		t.Fatalf("inbound mentions=%+v mentioned_me=%v mention_all=%v", result.Inbound.Mentions, result.Inbound.MentionedMe, result.Inbound.MentionAll)
 	}
 	gateway.mu.Lock()
 	if len(gateway.chatSessions) != 1 {
@@ -163,12 +171,20 @@ func TestDingTalkConnectorSendUsesSessionWebhook(t *testing.T) {
 			Text    struct {
 				Content string `json:"content"`
 			} `json:"text"`
+			At struct {
+				AtUserIDs     []string `json:"atUserIds"`
+				AtDingtalkIDs []string `json:"atDingtalkIds"`
+				IsAtAll       bool     `json:"isAtAll"`
+			} `json:"at"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if body.MsgType != "text" || body.Text.Content != "reply" {
+		if body.MsgType != "text" || body.Text.Content != "reply @ding-1 @staff-1 @all" {
 			t.Fatalf("body=%+v", body)
+		}
+		if len(body.At.AtUserIDs) != 1 || body.At.AtUserIDs[0] != "staff-1" || len(body.At.AtDingtalkIDs) != 1 || body.At.AtDingtalkIDs[0] != "ding-1" || !body.At.IsAtAll {
+			t.Fatalf("at=%+v", body.At)
 		}
 		return testJSONResponse(map[string]any{"errcode": 0, "errmsg": "ok"})
 	})}
@@ -189,6 +205,11 @@ func TestDingTalkConnectorSendUsesSessionWebhook(t *testing.T) {
 		ChatType:    sdk.ChatTypeGroup,
 		ChatID:      "cid-group",
 		Text:        "reply",
+		MentionAll:  true,
+		Mentions: []sdk.MentionIdentity{
+			{ID: "staff-1", IDType: "staff_id"},
+			{ID: "ding-1", IDType: "dingtalk_id"},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -198,8 +219,78 @@ func TestDingTalkConnectorSendUsesSessionWebhook(t *testing.T) {
 	}
 }
 
+func TestDingTalkConnectorSendPersistsTokenForEmptyState(t *testing.T) {
+	var tokenCalls int
+	httpClient := &http.Client{Transport: testRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Path {
+		case "/v1.0/oauth2/accessToken":
+			tokenCalls++
+			return testJSONResponse(map[string]any{"accessToken": "token-empty-state", "expireIn": 7200})
+		case "/v1.0/robot/groupMessages/send":
+			if got := r.Header.Get("x-acs-dingtalk-access-token"); got != "token-empty-state" {
+				t.Fatalf("access token=%q", got)
+			}
+			return testJSONResponse(map[string]any{"processQueryKey": "pqk-empty-state"})
+		default:
+			t.Fatalf("unexpected request: %s", r.URL.Path)
+		}
+		return nil, nil
+	})}
+	store := newFakeSDKAccountStore()
+	result, err := NewConnector().Send(context.Background(), sdk.Runtime{
+		HTTPClient:   httpClient,
+		Account:      sdkAccount("account-1", "client-1", "secret-1", "https://api.dingtalk.test"),
+		AccountStore: store,
+	}, sdk.OutboundMessage{
+		AccountUUID: "account-1",
+		ChatType:    sdk.ChatTypeGroup,
+		ChatID:      "cid-group",
+		Text:        "reply",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokenCalls != 1 || result.MessageID != "pqk-empty-state" {
+		t.Fatalf("tokenCalls=%d result=%+v", tokenCalls, result)
+	}
+	state := store.state("account-1")
+	if state["access_token"] != "token-empty-state" || state["access_token_expires_at"] == nil {
+		t.Fatalf("saved state=%+v", state)
+	}
+}
+
+func TestDingTalkConnectorRejectsMismatchedRobotCode(t *testing.T) {
+	connector := newTestEventConnector(t)
+	gateway := &fakeSDKGateway{}
+	account := sdkAccount("account-1", "client-1", "secret-1", "")
+	result, err := connector.HandleEvent(context.Background(), sdk.Runtime{
+		WorkspaceUUID: "workspace-1",
+		Channel:       sdk.Channel{UUID: "channel-1", WorkspaceUUID: "workspace-1", Platform: Platform},
+		Account:       account,
+		Gateway:       gateway,
+		AccountStore:  newFakeSDKAccountStore(),
+	}, account, []byte(`{
+		"conversationType":"2",
+		"conversationId":"cid-group",
+		"senderStaffId":"staff-1",
+		"msgId":"msg-1",
+		"msgtype":"text",
+		"robotCode":"other-robot",
+		"text":{"content":"wrong robot"}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || !result.Ignored || result.Reason != "robot_code_mismatch" {
+		t.Fatalf("result=%+v", result)
+	}
+	if len(gateway.messages) != 0 {
+		t.Fatalf("messages=%+v", gateway.messages)
+	}
+}
+
 func TestDingTalkConnectorEventDirectChat(t *testing.T) {
-	connector := NewConnector()
+	connector := newTestEventConnector(t)
 	gateway := &fakeSDKGateway{}
 	account := sdkAccount("account-1", "client-1", "secret-1", "")
 	result, err := connector.HandleEvent(context.Background(), sdk.Runtime{
@@ -256,7 +347,7 @@ func TestDingTalkConnectorSendUsesRequestedAccount(t *testing.T) {
 			if err := json.Unmarshal([]byte(body.MsgParam), &param); err != nil {
 				t.Fatal(err)
 			}
-			if param["content"] != "reply" {
+			if param["content"] != "reply @ding-2 @staff-2 @all" {
 				t.Fatalf("msgParam=%+v", param)
 			}
 			return testJSONResponse(map[string]any{"processQueryKey": "pqk-2"})
@@ -279,6 +370,11 @@ func TestDingTalkConnectorSendUsesRequestedAccount(t *testing.T) {
 		ChatID:      "cid-group",
 		Text:        "reply",
 		MessageUUID: "message-uuid",
+		MentionAll:  true,
+		Mentions: []sdk.MentionIdentity{
+			{ID: "ding-2", IDType: "dingtalk_id"},
+			{ID: "staff-2", IDType: "staff_id"},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -372,6 +468,12 @@ func (s *fakeSDKAccountStore) SaveChannelAccountState(ctx context.Context, accou
 	defer s.mu.Unlock()
 	s.states[accountUUID] = state
 	return nil
+}
+
+func (s *fakeSDKAccountStore) LoadChannelAccountState(ctx context.Context, accountUUID string) (map[string]any, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.states[accountUUID], nil
 }
 
 func (s *fakeSDKAccountStore) state(accountUUID string) map[string]any {

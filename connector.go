@@ -34,7 +34,7 @@ type EventConnector interface {
 	HandleEvent(ctx context.Context, runtime sdk.Runtime, account sdk.ChannelAccount, body []byte) (*EventResult, error)
 }
 
-func NewConnector() Connector {
+func NewConnector() sdk.Connector {
 	return Connector{channel: Channel{}}
 }
 
@@ -115,19 +115,18 @@ func (c Connector) Start(ctx context.Context, runtime sdk.Runtime) error {
 		if err != nil {
 			return err
 		}
-		state, err := store.LoadAccount(accountUUID)
+		state, err := store.LoadAccount(ctx, accountUUID)
 		if err != nil {
 			return err
 		}
 		if state.ChannelLinkSession != sessionUUID {
 			state.ChannelLinkSession = sessionUUID
-			if err := store.SaveAccount(state); err != nil {
+			if err := store.SaveAccount(ctx, state); err != nil {
 				return err
 			}
 		}
 	}
-	<-ctx.Done()
-	return ctx.Err()
+	return nil
 }
 
 func (c Connector) Send(ctx context.Context, runtime sdk.Runtime, req sdk.OutboundMessage) (*sdk.SendResult, error) {
@@ -138,7 +137,7 @@ func (c Connector) Send(ctx context.Context, runtime sdk.Runtime, req sdk.Outbou
 	accountUUID := accountKey(account)
 	store := newConnectorStateStore(runtime.AccountStore)
 	store.seed(account)
-	accountState, err := store.LoadAccount(accountUUID)
+	accountState, err := store.LoadAccount(ctx, accountUUID)
 	if err != nil {
 		return nil, err
 	}
@@ -148,9 +147,13 @@ func (c Connector) Send(ctx context.Context, runtime sdk.Runtime, req sdk.Outbou
 		client.AccessToken = accountState.AccessToken
 		client.AccessTokenExpiresAt = accountState.AccessTokenExpires
 	}
+	at := dingtalkOutboundAtOptions(req)
 	if !boolValue(req.Raw["force_openapi"]) {
 		if webhook, ok := accountState.SessionWebhooks[outboundStateKey(req)]; ok && webhook.URL != "" && webhook.ExpiresAt.After(now.Add(10*time.Second)) {
-			resp, err := client.SendWebhookText(ctx, webhook.URL, req.Text)
+			resp, err := client.SendWebhookTextMessage(ctx, webhook.URL, dingtalk.SendWebhookTextRequest{
+				Text: req.Text,
+				At:   at,
+			})
 			if err != nil {
 				return nil, err
 			}
@@ -173,10 +176,8 @@ func (c Connector) Send(ctx context.Context, runtime sdk.Runtime, req sdk.Outbou
 		}
 		accountState.AccessToken = token
 		accountState.AccessTokenExpires = expiresAt
-		if len(account.State) > 0 {
-			if err := store.SaveAccount(accountState); err != nil {
-				return nil, err
-			}
+		if err := store.SaveAccount(ctx, accountState); err != nil {
+			return nil, err
 		}
 	}
 	resp, err := client.SendText(ctx, dingtalk.SendTextRequest{
@@ -185,6 +186,7 @@ func (c Connector) Send(ctx context.Context, runtime sdk.Runtime, req sdk.Outbou
 		Text:        req.Text,
 		RobotCode:   firstString(req.Raw["robot_code"], account.Credential["robot_code"], account.Credential["client_id"]),
 		MessageUUID: req.MessageUUID,
+		At:          at,
 	})
 	if err != nil {
 		return nil, err
@@ -219,6 +221,9 @@ func (c Connector) processStreamEvent(ctx context.Context, runtime sdk.Runtime, 
 	if runtime.Gateway == nil {
 		return nil, fmt.Errorf("dingtalk event handling requires sdk.Runtime.Gateway")
 	}
+	if !dingtalkEventOwnershipValid(account, event) {
+		return &EventResult{Type: "message", Ignored: true, Reason: "robot_code_mismatch"}, nil
+	}
 	accountUUID := accountKey(account)
 	if accountUUID == "" {
 		return nil, fmt.Errorf("dingtalk account_uuid or client_id is required")
@@ -236,7 +241,7 @@ func (c Connector) processStreamEvent(ctx context.Context, runtime sdk.Runtime, 
 
 	store := newConnectorStateStore(runtime.AccountStore)
 	store.seed(account)
-	state, err := store.LoadAccount(accountUUID)
+	state, err := store.LoadAccount(ctx, accountUUID)
 	if err != nil {
 		return nil, err
 	}
@@ -305,7 +310,7 @@ func (c Connector) processStreamEvent(ctx context.Context, runtime sdk.Runtime, 
 			ExpiresAt: timeFromUnixMilli(event.SessionWebhookExpiredTime),
 		}
 	}
-	if err := store.SaveAccount(state); err != nil {
+	if err := store.SaveAccount(ctx, state); err != nil {
 		return nil, err
 	}
 	return &EventResult{Type: "message", SessionUUID: sessionUUID, MessageUUID: messageUUID, Inbound: &inbound}, nil
@@ -326,7 +331,8 @@ func BuildInboundMessage(workspaceUUID, channelUUID, accountUUID string, event *
 		Text:          text,
 		DedupeKey:     event.DedupeKey(accountUUID),
 		Mentions:      mentions,
-		MentionedMe:   event.IsInAtList,
+		MentionedMe:   event.IsInAtList || event.IsAtAll,
+		MentionAll:    event.IsAtAll,
 		Raw: map[string]any{
 			"conversation_type":          event.ConversationType,
 			"conversation_id":            event.ConversationID,
@@ -340,6 +346,11 @@ func BuildInboundMessage(workspaceUUID, channelUUID, accountUUID string, event *
 			"session_webhook":            event.SessionWebhook,
 			"session_webhook_expires_at": timeFromUnixMilli(event.SessionWebhookExpiredTime),
 			"is_in_at_list":              event.IsInAtList,
+			"is_at_all":                  event.IsAtAll,
+			"mention_all":                event.IsAtAll,
+			"at_user_ids":                event.AtUserIDs,
+			"at_dingtalk_ids":            event.AtDingtalkIDs,
+			"at_mobiles":                 event.AtMobiles,
 			"chatbot_user_id":            event.ChatbotUserID,
 			"chatbot_corp_id":            event.ChatbotCorpID,
 		},
@@ -347,17 +358,138 @@ func BuildInboundMessage(workspaceUUID, channelUUID, accountUUID string, event *
 }
 
 func dingtalkMentionIdentities(event *dingtalk.StreamEvent) []sdk.MentionIdentity {
-	if event == nil || !event.IsInAtList {
+	if event == nil {
 		return nil
 	}
-	out := make([]sdk.MentionIdentity, 0, 2)
-	if id := strings.TrimSpace(event.ChatbotUserID); id != "" {
-		out = append(out, sdk.MentionIdentity{ID: id, IDType: "chatbot_user_id"})
+	out := make([]sdk.MentionIdentity, 0, 2+len(event.AtUserIDs)+len(event.AtDingtalkIDs)+len(event.AtMobiles))
+	for _, id := range event.AtUserIDs {
+		out = append(out, sdk.MentionIdentity{ID: id, IDType: "staff_id"})
 	}
-	if id := strings.TrimSpace(event.RobotCode); id != "" {
-		out = append(out, sdk.MentionIdentity{ID: id, IDType: "robot_code"})
+	for _, id := range event.AtDingtalkIDs {
+		out = append(out, sdk.MentionIdentity{ID: id, IDType: "dingtalk_id"})
+	}
+	for _, id := range event.AtMobiles {
+		out = append(out, sdk.MentionIdentity{ID: id, IDType: "mobile"})
+	}
+	if event.IsAtAll {
+		out = append(out, sdk.MentionIdentity{ID: "all", IDType: "mention_all", DisplayName: "all"})
+	}
+	if event.IsInAtList {
+		if id := strings.TrimSpace(event.ChatbotUserID); id != "" {
+			out = append(out, sdk.MentionIdentity{ID: id, IDType: "chatbot_user_id"})
+		}
+		if id := strings.TrimSpace(event.RobotCode); id != "" {
+			out = append(out, sdk.MentionIdentity{ID: id, IDType: "robot_code"})
+		}
 	}
 	return uniqueMentionIdentities(out)
+}
+
+func dingtalkOutboundAtOptions(req sdk.OutboundMessage) dingtalk.AtOptions {
+	out := dingtalk.AtOptions{
+		AtAll: req.MentionAll || boolValue(req.Raw["mention_all"]) || boolValue(req.Raw["mentionAll"]) ||
+			boolValue(req.Raw["at_all"]) || boolValue(req.Raw["atAll"]) || boolValue(req.Raw["isAtAll"]),
+	}
+	for _, id := range stringSlice(firstValue(req.Raw["at_user_ids"], req.Raw["atUserIds"], req.Raw["user_ids"], req.Raw["userIds"])) {
+		out.AtUserIDs = append(out.AtUserIDs, id)
+	}
+	for _, id := range stringSlice(firstValue(req.Raw["at_dingtalk_ids"], req.Raw["atDingtalkIds"], req.Raw["dingtalk_ids"], req.Raw["dingtalkIds"])) {
+		out.AtDingtalkIDs = append(out.AtDingtalkIDs, id)
+	}
+	for _, id := range stringSlice(firstValue(req.Raw["at_mobiles"], req.Raw["atMobiles"], req.Raw["mobiles"])) {
+		out.AtMobiles = append(out.AtMobiles, id)
+	}
+	mentions := append([]sdk.MentionIdentity{}, req.Mentions...)
+	mentions = append(mentions, rawMentionIdentities(req.Raw["mentions"])...)
+	for _, mention := range mentions {
+		id := strings.TrimSpace(mention.ID)
+		if id == "" {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(mention.IDType)) {
+		case "all", "mention_all", "at_all":
+			out.AtAll = true
+		case "dingtalk_id", "dingtalk_user_id", "chatbot_user_id", "robot_user_id", "robot_code":
+			out.AtDingtalkIDs = append(out.AtDingtalkIDs, id)
+		case "mobile", "phone":
+			out.AtMobiles = append(out.AtMobiles, id)
+		default:
+			out.AtUserIDs = append(out.AtUserIDs, id)
+		}
+	}
+	out.AtUserIDs = uniqueStringList(out.AtUserIDs)
+	out.AtDingtalkIDs = uniqueStringList(out.AtDingtalkIDs)
+	out.AtMobiles = uniqueStringList(out.AtMobiles)
+	return out
+}
+
+func dingtalkEventOwnershipValid(account sdk.ChannelAccount, event *dingtalk.StreamEvent) bool {
+	expected := firstString(account.Credential["robot_code"], account.Credential["client_id"])
+	if expected == "" || event == nil {
+		return true
+	}
+	received := strings.TrimSpace(event.RobotCode)
+	if received == "" {
+		return true
+	}
+	return received == expected
+}
+
+func rawMentionIdentities(value any) []sdk.MentionIdentity {
+	switch typed := value.(type) {
+	case []sdk.MentionIdentity:
+		return typed
+	case []any:
+		out := make([]sdk.MentionIdentity, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, mentionIdentityFromAny(item))
+		}
+		return out
+	case []map[string]any:
+		out := make([]sdk.MentionIdentity, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, mentionIdentityFromAny(item))
+		}
+		return out
+	case string:
+		if strings.TrimSpace(typed) == "" {
+			return nil
+		}
+		var parsed []map[string]any
+		if err := json.Unmarshal([]byte(typed), &parsed); err == nil {
+			out := make([]sdk.MentionIdentity, 0, len(parsed))
+			for _, item := range parsed {
+				out = append(out, mentionIdentityFromAny(item))
+			}
+			return out
+		}
+	case json.RawMessage:
+		var parsed []map[string]any
+		if err := json.Unmarshal(typed, &parsed); err == nil {
+			out := make([]sdk.MentionIdentity, 0, len(parsed))
+			for _, item := range parsed {
+				out = append(out, mentionIdentityFromAny(item))
+			}
+			return out
+		}
+	}
+	return nil
+}
+
+func mentionIdentityFromAny(value any) sdk.MentionIdentity {
+	mention, ok := value.(sdk.MentionIdentity)
+	if ok {
+		return mention
+	}
+	item, ok := value.(map[string]any)
+	if !ok {
+		return sdk.MentionIdentity{}
+	}
+	return sdk.MentionIdentity{
+		ID:          firstString(item["id"], item["ID"], item["user_id"], item["userId"], item["dingtalk_id"], item["dingtalkId"], item["mobile"]),
+		IDType:      firstString(item["id_type"], item["idType"], item["IDType"], item["type"]),
+		DisplayName: firstString(item["display_name"], item["displayName"], item["name"]),
+	}
 }
 
 func uniqueMentionIdentities(mentions []sdk.MentionIdentity) []sdk.MentionIdentity {
@@ -481,19 +613,60 @@ func (s *connectorStateStore) seed(account sdk.ChannelAccount) {
 	s.sdkAccounts[accountID] = account
 }
 
-func (s *connectorStateStore) LoadAccount(accountID string) (*beakstate.AccountState, error) {
+func (s *connectorStateStore) LoadAccount(ctx context.Context, accountID string) (*beakstate.AccountState, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if account, ok := s.accounts[accountID]; ok {
+		sdkAccount := s.sdkAccounts[accountID]
+		accountStore := s.accountStore
+		s.mu.Unlock()
+		if refreshed, ok, err := loadAccountState(ctx, accountStore, sdkAccount); err != nil {
+			return nil, err
+		} else if ok {
+			s.mu.Lock()
+			s.accounts[accountID] = refreshed
+			sdkAccount.State = accountStateToSDK(*refreshed, sdkAccount).State
+			s.sdkAccounts[accountID] = sdkAccount
+			s.mu.Unlock()
+			return refreshed, nil
+		}
 		return account, nil
+	}
+	accountStore := s.accountStore
+	s.mu.Unlock()
+	if refreshed, ok, err := loadAccountState(ctx, accountStore, sdk.ChannelAccount{UUID: accountID}); err != nil {
+		return nil, err
+	} else if ok {
+		s.mu.Lock()
+		s.accounts[accountID] = refreshed
+		s.sdkAccounts[accountID] = accountStateToSDK(*refreshed, sdk.ChannelAccount{UUID: accountID})
+		s.mu.Unlock()
+		return refreshed, nil
 	}
 	account := &beakstate.AccountState{AccountID: accountID}
 	account.EnsureMaps()
+	s.mu.Lock()
 	s.accounts[accountID] = account
+	s.mu.Unlock()
 	return account, nil
 }
 
-func (s *connectorStateStore) SaveAccount(account *beakstate.AccountState) error {
+func loadAccountState(ctx context.Context, accountStore sdk.AccountStore, account sdk.ChannelAccount) (*beakstate.AccountState, bool, error) {
+	if accountStore == nil || strings.TrimSpace(account.UUID) == "" {
+		return nil, false, nil
+	}
+	state, err := accountStore.LoadChannelAccountState(ctx, account.UUID)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(state) == 0 {
+		return nil, false, nil
+	}
+	account.State = state
+	refreshed := sdkAccountToState(account)
+	return &refreshed, true, nil
+}
+
+func (s *connectorStateStore) SaveAccount(ctx context.Context, account *beakstate.AccountState) error {
 	if err := beakstate.TouchAccount(account); err != nil {
 		return err
 	}
@@ -505,7 +678,7 @@ func (s *connectorStateStore) SaveAccount(account *beakstate.AccountState) error
 	accountStore := s.accountStore
 	s.mu.Unlock()
 	if accountStore != nil && sdkAccount.UUID != "" {
-		return accountStore.SaveChannelAccountState(context.Background(), sdkAccount.UUID, sdkAccount.State)
+		return accountStore.SaveChannelAccountState(ctx, sdkAccount.UUID, sdkAccount.State)
 	}
 	return nil
 }
@@ -630,6 +803,61 @@ func stringMap(value any) map[string]string {
 	return out
 }
 
+func stringSlice(value any) []string {
+	var values []any
+	switch typed := value.(type) {
+	case []string:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if item = strings.TrimSpace(item); item != "" {
+				out = append(out, item)
+			}
+		}
+		return out
+	case []any:
+		values = typed
+	case string:
+		if strings.TrimSpace(typed) == "" {
+			return nil
+		}
+		var parsed []any
+		if err := json.Unmarshal([]byte(typed), &parsed); err == nil {
+			values = parsed
+			break
+		}
+		return []string{strings.TrimSpace(typed)}
+	case json.RawMessage:
+		var parsed []any
+		if err := json.Unmarshal(typed, &parsed); err == nil {
+			values = parsed
+		}
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if item := strings.TrimSpace(stringValue(value)); item != "" {
+			out = append(out, item)
+		}
+	}
+	return uniqueStringList(out)
+}
+
+func uniqueStringList(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
 func stringValue(value any) string {
 	if value == nil {
 		return ""
@@ -660,6 +888,15 @@ func firstString(values ...any) string {
 		}
 	}
 	return ""
+}
+
+func firstValue(values ...any) any {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
 }
 
 var _ sdk.Connector = Connector{}

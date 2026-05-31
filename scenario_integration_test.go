@@ -32,10 +32,8 @@ func TestDingTalkScenarioMultipleAccountsShareGroupButUseSeparateSessions(t *tes
 		AccountStore:  store,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
-	defer cancel()
-	err := connector.Start(ctx, runtime)
-	if !errors.Is(err, context.DeadlineExceeded) {
+	err := connector.Start(context.Background(), runtime)
+	if err != nil {
 		t.Fatalf("Start error=%v", err)
 	}
 	if gateway.linkSession("account-a") == "" || gateway.linkSession("account-b") == "" {
@@ -290,10 +288,8 @@ func TestDingTalkScenarioCredentialInboundAndFixedReply(t *testing.T) {
 		HTTPClient:    httpClient,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
-	defer cancel()
-	err := connector.Start(ctx, runtime)
-	if !errors.Is(err, context.DeadlineExceeded) {
+	err := connector.Start(context.Background(), runtime)
+	if err != nil {
 		t.Fatalf("Start error=%v", err)
 	}
 
@@ -355,6 +351,177 @@ func TestDingTalkScenarioCredentialInboundAndFixedReply(t *testing.T) {
 	inboundSeen, ok := state["inbound_seen"].(map[string]string)
 	if !ok || inboundSeen["account-fixed:message:msg-fixed-1"] == "" {
 		t.Fatalf("inbound seen=%+v", state["inbound_seen"])
+	}
+}
+
+func TestDingTalkScenarioMentionsInboundAndSessionWebhookOutbound(t *testing.T) {
+	const sessionWebhook = "https://oapi.dingtalk.test/robot/sendBySession?session=mention"
+	connector := NewConnector()
+	eventConnector, ok := any(connector).(EventConnector)
+	if !ok {
+		t.Fatal("connector should implement EventConnector")
+	}
+	gateway := newScenarioGateway(Platform)
+	store := newScenarioStore()
+	account := scenarioDingTalkAccount("account-mention", "client-mention", "secret-mention", "robot-mention", "bot-mention")
+	var sentText string
+	var sentAt struct {
+		AtUserIDs     []string `json:"atUserIds"`
+		AtDingtalkIDs []string `json:"atDingtalkIds"`
+		IsAtAll       bool     `json:"isAtAll"`
+	}
+	httpClient := &http.Client{Transport: scenarioRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.String() != sessionWebhook {
+			t.Fatalf("unexpected request url: %s", r.URL.String())
+		}
+		var body struct {
+			MsgType string `json:"msgtype"`
+			Text    struct {
+				Content string `json:"content"`
+			} `json:"text"`
+			At struct {
+				AtUserIDs     []string `json:"atUserIds"`
+				AtDingtalkIDs []string `json:"atDingtalkIds"`
+				IsAtAll       bool     `json:"isAtAll"`
+			} `json:"at"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.MsgType != "text" {
+			t.Fatalf("body=%+v", body)
+		}
+		sentText = body.Text.Content
+		sentAt = body.At
+		return scenarioJSONResponse(map[string]any{"errcode": 0, "errmsg": "ok"})
+	})}
+	runtime := sdk.Runtime{
+		WorkspaceUUID: "workspace-1",
+		Channel:       sdk.Channel{UUID: "channel-1", WorkspaceUUID: "workspace-1", Platform: Platform},
+		Account:       account,
+		Gateway:       gateway,
+		AccountStore:  store,
+		HTTPClient:    httpClient,
+	}
+	if err := connector.Start(context.Background(), runtime); err != nil {
+		t.Fatalf("Start error=%v", err)
+	}
+	result, err := eventConnector.HandleEvent(context.Background(), runtime, account, []byte(`{
+		"conversationType":"2",
+		"conversationId":"cid-mentions",
+		"conversationTitle":"Mention Group",
+		"senderStaffId":"staff-mention-sender",
+		"senderNick":"Alice",
+		"msgId":"msg-mention",
+		"msgtype":"text",
+		"isInAtList":true,
+		"text":{"content":"@机器人 @所有人 帮我看下","at":{"atUserIds":["staff-mention-bot"],"atDingtalkIds":["bot-mention"],"isAtAll":true}},
+		"chatbotUserId":"bot-mention",
+		"chatbotCorpId":"corp-mention",
+		"robotCode":"robot-mention",
+		"sessionWebhook":"`+sessionWebhook+`",
+		"sessionWebhookExpiredTime":4102444800000
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Inbound == nil || !result.Inbound.MentionedMe || !result.Inbound.MentionAll || len(result.Inbound.Mentions) < 2 {
+		t.Fatalf("inbound mention state=%+v", result.Inbound)
+	}
+
+	account.State = store.state("account-mention")
+	runtime.Account = account
+	sendResult, err := connector.Send(context.Background(), runtime, sdk.OutboundMessage{
+		AccountUUID: "account-mention",
+		ChatType:    sdk.ChatTypeGroup,
+		ChatID:      "cid-mentions",
+		Text:        "收到，我来处理",
+		MessageUUID: "agent-message-mention",
+		MentionAll:  true,
+		Mentions: []sdk.MentionIdentity{
+			{ID: "staff-mention-sender", IDType: "staff_id", DisplayName: "Alice"},
+			{ID: "ding-mention-sender", IDType: "dingtalk_id"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sendResult.Raw["delivery_method"] != "session_webhook" {
+		t.Fatalf("send result=%+v", sendResult)
+	}
+	if sentText != "收到，我来处理 @ding-mention-sender @staff-mention-sender @all" {
+		t.Fatalf("sent text=%q", sentText)
+	}
+	if len(sentAt.AtUserIDs) != 1 || sentAt.AtUserIDs[0] != "staff-mention-sender" ||
+		len(sentAt.AtDingtalkIDs) != 1 || sentAt.AtDingtalkIDs[0] != "ding-mention-sender" ||
+		!sentAt.IsAtAll {
+		t.Fatalf("sent at=%+v", sentAt)
+	}
+}
+
+func TestDingTalkScenarioExpiredSessionWebhookFallsBackToOpenAPI(t *testing.T) {
+	expiredWebhook := "https://oapi.dingtalk.test/robot/sendBySession?session=expired"
+	account := scenarioDingTalkAccount("account-expired", "client-expired", "secret-expired", "robot-expired", "bot-expired")
+	account.State = map[string]any{
+		"session_webhooks": map[string]any{
+			"group:cid-expired": map[string]any{
+				"url":        expiredWebhook,
+				"expires_at": time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano),
+			},
+		},
+		"access_token":            "cached-token-expired",
+		"access_token_expires_at": time.Now().Add(time.Hour).UTC(),
+	}
+
+	var sentPaths []string
+	httpClient := &http.Client{Transport: scenarioRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		sentPaths = append(sentPaths, r.URL.Path)
+		switch r.URL.Path {
+		case "/v1.0/robot/groupMessages/send":
+			if got := r.Header.Get("x-acs-dingtalk-access-token"); got != "cached-token-expired" {
+				t.Fatalf("token header=%q", got)
+			}
+			var body struct {
+				RobotCode          string `json:"robotCode"`
+				OpenConversationID string `json:"openConversationId"`
+				MsgParam           string `json:"msgParam"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body.RobotCode != "robot-expired" || body.OpenConversationID != "cid-expired" {
+				t.Fatalf("openapi body=%+v", body)
+			}
+			assertDingTalkTextParam(t, body.MsgParam, "fallback reply @ding-expired @all")
+			return scenarioJSONResponse(map[string]any{"processQueryKey": "pqk-expired"})
+		default:
+			t.Fatalf("expired sessionWebhook should not be used; unexpected request path: %s url=%s", r.URL.Path, r.URL.String())
+		}
+		return nil, nil
+	})}
+
+	result, err := NewConnector().Send(context.Background(), sdk.Runtime{
+		Account:    account,
+		HTTPClient: httpClient,
+	}, sdk.OutboundMessage{
+		AccountUUID: "account-expired",
+		ChatType:    sdk.ChatTypeGroup,
+		ChatID:      "cid-expired",
+		Text:        "fallback reply",
+		MessageUUID: "agent-message-expired",
+		Raw: map[string]any{
+			"at_dingtalk_ids": []any{"ding-expired"},
+			"mention_all":     "true",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.MessageID != "pqk-expired" || result.Raw["delivery_method"] != "openapi" {
+		t.Fatalf("result=%+v", result)
+	}
+	if strings.Join(sentPaths, ",") != "/v1.0/robot/groupMessages/send" {
+		t.Fatalf("request paths=%+v", sentPaths)
 	}
 }
 
@@ -485,6 +652,10 @@ func (s *scenarioStore) SaveChannelAccountState(ctx context.Context, accountUUID
 	}
 	s.states[accountUUID] = copied
 	return nil
+}
+
+func (s *scenarioStore) LoadChannelAccountState(ctx context.Context, accountUUID string) (map[string]any, error) {
+	return s.state(accountUUID), nil
 }
 
 func (s *scenarioStore) state(accountUUID string) map[string]any {

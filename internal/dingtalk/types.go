@@ -29,6 +29,14 @@ type SendTextRequest struct {
 	Text        string
 	RobotCode   string
 	MessageUUID string
+	At          AtOptions
+}
+
+type AtOptions struct {
+	AtUserIDs     []string
+	AtDingtalkIDs []string
+	AtMobiles     []string
+	AtAll         bool
 }
 
 type SendTextResponse struct {
@@ -42,6 +50,11 @@ type WebhookSendResponse struct {
 	ErrCode int            `json:"errcode"`
 	ErrMsg  string         `json:"errmsg"`
 	Raw     map[string]any `json:"-"`
+}
+
+type SendWebhookTextRequest struct {
+	Text string
+	At   AtOptions
 }
 
 type StreamEvent struct {
@@ -59,6 +72,10 @@ type StreamEvent struct {
 	MsgID                     string `json:"msgId"`
 	MsgType                   string `json:"msgtype"`
 	IsInAtList                bool   `json:"isInAtList"`
+	IsAtAll                   bool   `json:"isAtAll"`
+	AtUserIDs                 []string
+	AtDingtalkIDs             []string
+	AtMobiles                 []string
 	DeliveryMessageID         string
 	Raw                       map[string]any
 }
@@ -110,8 +127,32 @@ func ParseStreamEvent(data []byte) (*StreamEvent, error) {
 		MsgID:                     stringValue(raw["msgId"]),
 		MsgType:                   stringValue(raw["msgtype"]),
 		IsInAtList:                boolValue(raw["isInAtList"]),
-		DeliveryMessageID:         deliveryMessageID,
-		Raw:                       raw,
+		IsAtAll: boolValue(firstValue(
+			raw["isAtAll"],
+			pathValue(raw, "text", "at", "isAtAll"),
+			pathValue(raw, "at", "isAtAll"),
+			raw["atAll"],
+		)),
+		AtUserIDs: stringSlice(firstValue(
+			pathValue(raw, "text", "at", "atUserIds"),
+			pathValue(raw, "at", "atUserIds"),
+			raw["atUserIds"],
+			raw["at_user_ids"],
+		)),
+		AtDingtalkIDs: stringSlice(firstValue(
+			pathValue(raw, "text", "at", "atDingtalkIds"),
+			pathValue(raw, "at", "atDingtalkIds"),
+			raw["atDingtalkIds"],
+			raw["at_dingtalk_ids"],
+		)),
+		AtMobiles: stringSlice(firstValue(
+			pathValue(raw, "text", "at", "atMobiles"),
+			pathValue(raw, "at", "atMobiles"),
+			raw["atMobiles"],
+			raw["at_mobiles"],
+		)),
+		DeliveryMessageID: deliveryMessageID,
+		Raw:               raw,
 	}
 	if event.MsgType == "" {
 		event.MsgType = "text"
@@ -284,6 +325,61 @@ func firstString(values ...any) string {
 		}
 	}
 	return ""
+}
+
+func firstValue(values ...any) any {
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		return value
+	}
+	return nil
+}
+
+func stringSlice(value any) []string {
+	var values []any
+	switch typed := value.(type) {
+	case []string:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if item = strings.TrimSpace(item); item != "" {
+				out = append(out, item)
+			}
+		}
+		return out
+	case []any:
+		values = typed
+	case string:
+		if typed == "" {
+			return nil
+		}
+		var parsed []any
+		if err := json.Unmarshal([]byte(typed), &parsed); err == nil {
+			values = parsed
+			break
+		}
+		return []string{strings.TrimSpace(typed)}
+	case json.RawMessage:
+		var parsed []any
+		if err := json.Unmarshal(typed, &parsed); err == nil {
+			values = parsed
+		}
+	}
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		item := strings.TrimSpace(stringValue(value))
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		out = append(out, item)
+	}
+	return out
 }
 
 func stringValue(value any) string {
