@@ -15,7 +15,7 @@ v1 supports:
 - Beak-host-owned credential and connector state persistence.
 - Beak-host-owned DingTalk Stream connection, with robot event bodies passed into the SDK.
 - Inbound text, markdown, and simple richText messages into Beak sessions.
-- Outbound Beak agent text replies through DingTalk `sessionWebhook` when available, with Open API fallback when no valid webhook is stored.
+- Outbound Beak agent text replies through DingTalk `sessionWebhook` when available, with Open API fallback when no valid `sessionWebhook` is stored.
 - Access token caching in host-owned account state for Open API fallback.
 - DingTalk Stream ACK frame helper for Beak-host-owned Stream runtimes.
 - Direct and group chat normalization.
@@ -32,6 +32,14 @@ v1 does not support:
 - Beak host code changes.
 - A DingTalk connector CLI.
 - SDK-owned local runtime files or local state directories.
+
+## OpenClaw Reference Alignment
+
+The upstream [`DingTalk-Real-AI/dingtalk-openclaw-connector`](https://github.com/DingTalk-Real-AI/dingtalk-openclaw-connector) implementation uses `dingtalk-stream` / `DWClient` in its connection layer. The Stream callback is ACKed immediately, the robot event data is parsed and passed to the message handler, and `sessionWebhook` from the latest event is used for reply-path text delivery when present.
+
+This Go SDK keeps the same platform contract but moves the long-running Stream connection to Beak host. The SDK receives event bodies through `HandleEvent`, stores `sessionWebhook` in account state, and uses it in `Send` before falling back to DingTalk robot Open API.
+
+`sessionWebhook` is DingTalk's temporary reply URL. It is not a Beak inbound webhook endpoint.
 
 ## Package Layout
 
@@ -96,7 +104,7 @@ runtime := sdk.Runtime{
 }
 ```
 
-`Start(ctx, runtime)` validates account wiring and creates or reuses one channel-link session per account. Inbound DingTalk events are received by the Beak host DingTalk Stream runtime and passed to `HandleEvent`. `Start` does not launch a CLI, read runtime files, or own a local event server.
+`Start(ctx, runtime)` validates account wiring, creates or reuses one channel-link session per account, persists account state, and then returns. Inbound DingTalk events are received by the Beak host DingTalk Stream runtime and passed to `HandleEvent`. `Start` does not launch a CLI, read runtime files, subscribe to Beak agent streams, or own a local event server.
 
 ## DingTalk Stream Events
 
@@ -127,7 +135,7 @@ if result.Ignored {
 - `conversationType=2` normalized as group chat.
 - Text, markdown, and simple richText extraction.
 - Dedupe by `msgId` or Stream delivery message id.
-- `sessionWebhook`, webhook expiry, `isInAtList` metadata capture, and standard `mentioned_me` mapping.
+- `sessionWebhook`, `sessionWebhook` expiry, `isInAtList` metadata capture, and standard `mentioned_me` mapping.
 - Self-echo filtering when `chatbot_user_id` is available.
 - `sdk.Gateway.EnsureChatSession` for session creation or reuse.
 - `sdk.Gateway.CreateMessage` for Beak message writes.
@@ -146,7 +154,7 @@ _, err := connector.Send(ctx, runtime, sdk.OutboundMessage{
 })
 ```
 
-If the latest inbound event stored a valid `sessionWebhook` for this chat, `connector.Send` replies through that webhook. Otherwise the SDK gets and caches an access token:
+If the latest inbound event stored a valid `sessionWebhook` for this chat, `connector.Send` replies through that `sessionWebhook`. Otherwise the SDK gets and caches an access token:
 
 ```text
 POST /v1.0/oauth2/accessToken
@@ -247,7 +255,7 @@ source_id=dingtalk:account_b:group:cid_group
 
 ## State Rules
 
-Beak host stores account state. The SDK only writes through `sdk.AccountStore.SaveChannelAccountState`:
+Beak host stores account state. The SDK reads and writes through `sdk.AccountStore`:
 
 - `channel_link_session`: connection session for this bot account.
 - `peer_sessions`: chat identity to Beak session uuid cache.

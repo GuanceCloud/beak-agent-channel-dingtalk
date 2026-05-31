@@ -177,6 +177,79 @@ func TestClientSendWebhookText(t *testing.T) {
 	}
 }
 
+func TestClientSendWebhookTextMessageMentions(t *testing.T) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.String() != "https://oapi.dingtalk.test/robot/sendBySession?session=s1" {
+			t.Fatalf("unexpected request: %s", r.URL.String())
+		}
+		var body struct {
+			MsgType string `json:"msgtype"`
+			Text    struct {
+				Content string `json:"content"`
+			} `json:"text"`
+			At struct {
+				AtUserIDs     []string `json:"atUserIds"`
+				AtDingtalkIDs []string `json:"atDingtalkIds"`
+				AtMobiles     []string `json:"atMobiles"`
+				IsAtAll       bool     `json:"isAtAll"`
+			} `json:"at"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.MsgType != "text" || body.Text.Content != "reply @ding-1 @staff-1 @13800000000 @all" {
+			t.Fatalf("body=%+v", body)
+		}
+		if len(body.At.AtUserIDs) != 1 || body.At.AtUserIDs[0] != "staff-1" ||
+			len(body.At.AtDingtalkIDs) != 1 || body.At.AtDingtalkIDs[0] != "ding-1" ||
+			len(body.At.AtMobiles) != 1 || body.At.AtMobiles[0] != "13800000000" ||
+			!body.At.IsAtAll {
+			t.Fatalf("at=%+v", body.At)
+		}
+		return jsonResponse(map[string]any{"errcode": 0, "errmsg": "ok"})
+	})}
+	client := NewClient("https://api.dingtalk.test", "client-1", "secret-1", "robot-1")
+	client.HTTPClient = httpClient
+	_, err := client.SendWebhookTextMessage(context.Background(), "https://oapi.dingtalk.test/robot/sendBySession?session=s1", SendWebhookTextRequest{
+		Text: "reply",
+		At: AtOptions{
+			AtUserIDs:     []string{"staff-1"},
+			AtDingtalkIDs: []string{"ding-1"},
+			AtMobiles:     []string{"13800000000"},
+			AtAll:         true,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClientSendWebhookTextMessageMentionBoundary(t *testing.T) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		var body struct {
+			Text struct {
+				Content string `json:"content"`
+			} `json:"text"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Text.Content != "reply @staff-12 @staff-1" {
+			t.Fatalf("content=%q", body.Text.Content)
+		}
+		return jsonResponse(map[string]any{"errcode": 0, "errmsg": "ok"})
+	})}
+	client := NewClient("https://api.dingtalk.test", "client-1", "secret-1", "robot-1")
+	client.HTTPClient = httpClient
+	_, err := client.SendWebhookTextMessage(context.Background(), "https://oapi.dingtalk.test/robot/sendBySession?session=s1", SendWebhookTextRequest{
+		Text: "reply @staff-12",
+		At:   AtOptions{AtUserIDs: []string{"staff-1"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestParseStreamEventText(t *testing.T) {
 	event, err := ParseStreamEvent([]byte(`{
 		"conversationType":"2",
@@ -186,7 +259,7 @@ func TestParseStreamEventText(t *testing.T) {
 		"senderNick":"Alice",
 		"msgId":"msg-1",
 		"msgtype":"text",
-		"text":{"content":" hello group "}
+		"text":{"content":" hello group ","at":{"atUserIds":["staff-2"],"atDingtalkIds":["ding-1"],"atMobiles":["13800000000"],"isAtAll":true}}
 	}`))
 	if err != nil {
 		t.Fatal(err)
@@ -200,6 +273,32 @@ func TestParseStreamEventText(t *testing.T) {
 	}
 	if got := event.DedupeKey("account-1"); got != "account-1:message:msg-1" {
 		t.Fatalf("dedupe=%q", got)
+	}
+	if !event.IsAtAll || len(event.AtUserIDs) != 1 || event.AtUserIDs[0] != "staff-2" ||
+		len(event.AtDingtalkIDs) != 1 || event.AtDingtalkIDs[0] != "ding-1" ||
+		len(event.AtMobiles) != 1 || event.AtMobiles[0] != "13800000000" {
+		t.Fatalf("mentions=%v %v %v mention_all=%v", event.AtUserIDs, event.AtDingtalkIDs, event.AtMobiles, event.IsAtAll)
+	}
+}
+
+func TestParseStreamEventTopLevelAt(t *testing.T) {
+	event, err := ParseStreamEvent([]byte(`{
+		"conversationType":"2",
+		"conversationId":"cid-group",
+		"senderStaffId":"staff-1",
+		"msgId":"msg-1",
+		"msgtype":"text",
+		"isAtAll":true,
+		"at":{"atUserIds":["staff-2"],"atDingtalkIds":["ding-1"],"atMobiles":["13800000000"]},
+		"text":{"content":"hello group"}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !event.IsAtAll || len(event.AtUserIDs) != 1 || event.AtUserIDs[0] != "staff-2" ||
+		len(event.AtDingtalkIDs) != 1 || event.AtDingtalkIDs[0] != "ding-1" ||
+		len(event.AtMobiles) != 1 || event.AtMobiles[0] != "13800000000" {
+		t.Fatalf("mentions=%v %v %v mention_all=%v", event.AtUserIDs, event.AtDingtalkIDs, event.AtMobiles, event.IsAtAll)
 	}
 }
 

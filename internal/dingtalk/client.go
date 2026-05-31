@@ -98,7 +98,7 @@ func (c *Client) SendText(ctx context.Context, req SendTextRequest) (*SendTextRe
 	if robotCode == "" {
 		robotCode = strings.TrimSpace(c.ClientID)
 	}
-	msgParam, err := json.Marshal(map[string]string{"content": req.Text})
+	msgParam, err := json.Marshal(textMsgParam(req.Text, req.At))
 	if err != nil {
 		return nil, err
 	}
@@ -125,18 +125,25 @@ func (c *Client) SendText(ctx context.Context, req SendTextRequest) (*SendTextRe
 }
 
 func (c *Client) SendWebhookText(ctx context.Context, sessionWebhook string, text string) (*WebhookSendResponse, error) {
+	return c.SendWebhookTextMessage(ctx, sessionWebhook, SendWebhookTextRequest{Text: text})
+}
+
+func (c *Client) SendWebhookTextMessage(ctx context.Context, sessionWebhook string, req SendWebhookTextRequest) (*WebhookSendResponse, error) {
 	sessionWebhook = strings.TrimSpace(sessionWebhook)
 	if sessionWebhook == "" {
 		return nil, fmt.Errorf("session_webhook is required")
 	}
-	if strings.TrimSpace(text) == "" {
+	if strings.TrimSpace(req.Text) == "" {
 		return nil, fmt.Errorf("text is required")
 	}
 	body := map[string]any{
 		"msgtype": "text",
 		"text": map[string]string{
-			"content": text,
+			"content": textWithAtSuffix(req.Text, req.At),
 		},
+	}
+	if at := webhookAtParam(req.At); len(at) > 0 {
+		body["at"] = at
 	}
 	var resp WebhookSendResponse
 	if err := c.doJSONURL(ctx, http.MethodPost, sessionWebhook, body, &resp); err != nil {
@@ -146,6 +153,71 @@ func (c *Client) SendWebhookText(ctx context.Context, sessionWebhook string, tex
 		return nil, fmt.Errorf("session webhook send text failed: code=%d message=%s", resp.ErrCode, resp.ErrMsg)
 	}
 	return &resp, nil
+}
+
+func textMsgParam(text string, at AtOptions) map[string]any {
+	return map[string]any{"content": textWithAtSuffix(text, at)}
+}
+
+func textWithAtSuffix(text string, at AtOptions) string {
+	out := strings.TrimSpace(text)
+	ids := append(uniqueStrings(at.AtDingtalkIDs), uniqueStrings(at.AtUserIDs)...)
+	ids = append(ids, uniqueStrings(at.AtMobiles)...)
+	for _, id := range ids {
+		if id != "" && !containsAtToken(out, id) {
+			out = strings.TrimSpace(out + " @" + id)
+		}
+	}
+	if at.AtAll && !strings.Contains(strings.ToLower(out), "@all") {
+		out = strings.TrimSpace(out + " @all")
+	}
+	return out
+}
+
+func containsAtToken(text string, id string) bool {
+	token := "@" + strings.TrimSpace(id)
+	for _, field := range strings.Fields(text) {
+		if strings.Trim(field, " \t\r\n,.;:!?，。！？、()[]{}<>") == token {
+			return true
+		}
+	}
+	return false
+}
+
+func webhookAtParam(at AtOptions) map[string]any {
+	out := make(map[string]any)
+	if values := uniqueStrings(at.AtUserIDs); len(values) > 0 {
+		out["atUserIds"] = values
+	}
+	if values := uniqueStrings(at.AtDingtalkIDs); len(values) > 0 {
+		out["atDingtalkIds"] = values
+	}
+	if values := uniqueStrings(at.AtMobiles); len(values) > 0 {
+		out["atMobiles"] = values
+	}
+	if at.AtAll {
+		out["isAtAll"] = true
+	} else if len(out) > 0 {
+		out["isAtAll"] = false
+	}
+	return out
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 type requestOption func(*http.Request)
