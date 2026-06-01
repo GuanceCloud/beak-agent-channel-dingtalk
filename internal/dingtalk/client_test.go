@@ -302,6 +302,23 @@ func TestParseStreamEventTopLevelAt(t *testing.T) {
 	}
 }
 
+func TestParseStreamEventTopLevelContentText(t *testing.T) {
+	event, err := ParseStreamEvent([]byte(`{
+		"conversationType":"2",
+		"conversationId":"cid-group",
+		"senderStaffId":"staff-1",
+		"msgId":"msg-1",
+		"msgtype":"text",
+		"content":" hello top-level "
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := event.Text(); got != "hello top-level" {
+		t.Fatalf("text=%q", got)
+	}
+}
+
 func TestStreamAck(t *testing.T) {
 	ack := StreamAck("delivery-1", "")
 	if ack.Code != 200 || ack.Headers["messageId"] != "delivery-1" || ack.Data != `{"response":null}` {

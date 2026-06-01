@@ -198,6 +198,9 @@ func (e StreamEvent) Text() string {
 		if text == "" {
 			text = pathString(e.Raw, "content", "text")
 		}
+		if text == "" {
+			text = directString(e.Raw["content"])
+		}
 		return normalizeText(text)
 	case "markdown":
 		text := pathString(e.Raw, "text", "content")
@@ -206,6 +209,9 @@ func (e StreamEvent) Text() string {
 		}
 		if text == "" {
 			text = pathString(e.Raw, "markdown", "text")
+		}
+		if text == "" {
+			text = directString(e.Raw["content"])
 		}
 		return normalizeText(text)
 	case "richText":
@@ -247,6 +253,14 @@ func StreamAck(messageID string, data string) StreamFrameResponse {
 		},
 		Data: data,
 	}
+}
+
+func directString(value any) string {
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return text
 }
 
 func pathString(raw map[string]any, path ...string) string {

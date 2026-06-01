@@ -73,6 +73,17 @@ type EventConnector interface {
 
 Beak host 在 DingTalk Stream 收到 robot 事件后，可以 type assert 这个接口，把原始 event data 传给 SDK。
 
+如果 host 暴露钉钉 HTTP callback endpoint，connector 也实现：
+
+```go
+type WebhookRequestConnector interface {
+	sdk.Connector
+	HandleWebhookRequest(ctx context.Context, runtime sdk.Runtime, account sdk.ChannelAccount, req *http.Request) (*sdk.WebhookResponse, error)
+}
+```
+
+`HandleWebhookRequest` 使用 `client_secret` 校验钉钉 `timestamp` / `sign` header，处理 event body，并返回平台 ack response。
+
 ## Credential Schema
 
 `connector.CredentialSchema(ctx)` 要求 Beak UI 采集：

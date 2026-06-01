@@ -1,8 +1,10 @@
 package beakdingtalk
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -17,6 +19,9 @@ func TestDingTalkConnectorMetadataAndSchema(t *testing.T) {
 	var connector sdk.Connector = NewConnector()
 	if _, ok := connector.(EventConnector); !ok {
 		t.Fatal("NewConnector should expose EventConnector for host-owned DingTalk Stream routing")
+	}
+	if _, ok := connector.(WebhookRequestConnector); !ok {
+		t.Fatal("NewConnector should expose WebhookRequestConnector for HTTP callback routing")
 	}
 
 	metadata := connector.Metadata()
@@ -50,6 +55,15 @@ func newTestEventConnector(t *testing.T) EventConnector {
 	connector, ok := NewConnector().(EventConnector)
 	if !ok {
 		t.Fatal("NewConnector should expose EventConnector")
+	}
+	return connector
+}
+
+func newTestWebhookRequestConnector(t *testing.T) WebhookRequestConnector {
+	t.Helper()
+	connector, ok := NewConnector().(WebhookRequestConnector)
+	if !ok {
+		t.Fatal("NewConnector should expose WebhookRequestConnector")
 	}
 	return connector
 }
@@ -156,6 +170,59 @@ func TestDingTalkConnectorEventCreatesMessageAndDedupes(t *testing.T) {
 	defer gateway.mu.Unlock()
 	if len(gateway.messages) != 1 {
 		t.Fatalf("duplicate created message=%+v", gateway.messages)
+	}
+}
+
+func TestDingTalkConnectorWebhookRequestVerifiesSignature(t *testing.T) {
+	connector := newTestWebhookRequestConnector(t)
+	gateway := &fakeSDKGateway{}
+	account := sdkAccount("account-1", "client-1", "secret-1", "")
+	body := []byte(`{
+		"conversationType":"2",
+		"conversationId":"cid-group",
+		"senderStaffId":"staff-1",
+		"msgId":"msg-http-1",
+		"msgtype":"text",
+		"text":{"content":"hello http"}
+	}`)
+	req, err := http.NewRequest(http.MethodPost, "https://beak.test/dingtalk", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	timestamp := fmt.Sprintf("%d", time.Now().UTC().UnixMilli())
+	req.Header.Set("timestamp", timestamp)
+	req.Header.Set("sign", dingtalkWebhookSignature(timestamp, "secret-1"))
+
+	response, err := connector.HandleWebhookRequest(context.Background(), sdk.Runtime{
+		WorkspaceUUID: "workspace-1",
+		Channel:       sdk.Channel{UUID: "channel-1", WorkspaceUUID: "workspace-1", Platform: Platform},
+		Account:       account,
+		Gateway:       gateway,
+		AccountStore:  newFakeSDKAccountStore(),
+	}, account, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK || len(response.Body) != 0 {
+		t.Fatalf("response=%+v body=%q", response, string(response.Body))
+	}
+	if len(gateway.messages) != 1 || gateway.messages[0].Content != "hello http" {
+		t.Fatalf("messages=%+v", gateway.messages)
+	}
+}
+
+func TestDingTalkConnectorWebhookRequestRejectsBadSignature(t *testing.T) {
+	connector := newTestWebhookRequestConnector(t)
+	account := sdkAccount("account-1", "client-1", "secret-1", "")
+	req, err := http.NewRequest(http.MethodPost, "https://beak.test/dingtalk", bytes.NewReader([]byte(`{"text":{"content":"hello"}}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("timestamp", fmt.Sprintf("%d", time.Now().UTC().UnixMilli()))
+	req.Header.Set("sign", "bad-signature")
+
+	if _, err := connector.HandleWebhookRequest(context.Background(), sdk.Runtime{}, account, req); err == nil || !strings.Contains(err.Error(), "signature mismatch") {
+		t.Fatalf("HandleWebhookRequest() error=%v, want signature mismatch", err)
 	}
 }
 

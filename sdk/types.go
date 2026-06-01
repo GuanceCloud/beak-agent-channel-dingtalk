@@ -26,6 +26,12 @@ type Connector interface {
 	Stop(ctx context.Context, account ChannelAccount) error
 }
 
+type WebhookResponse struct {
+	StatusCode int
+	Headers    map[string]string
+	Body       []byte
+}
+
 type ConnectorMetadata struct {
 	ID           string       `json:"id"`
 	Platform     string       `json:"platform"`

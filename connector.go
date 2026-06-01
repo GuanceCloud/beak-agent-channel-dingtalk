@@ -2,9 +2,16 @@ package beakdingtalk
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +39,11 @@ type EventResult struct {
 type EventConnector interface {
 	sdk.Connector
 	HandleEvent(ctx context.Context, runtime sdk.Runtime, account sdk.ChannelAccount, body []byte) (*EventResult, error)
+}
+
+type WebhookRequestConnector interface {
+	sdk.Connector
+	HandleWebhookRequest(ctx context.Context, runtime sdk.Runtime, account sdk.ChannelAccount, req *http.Request) (*sdk.WebhookResponse, error)
 }
 
 func NewConnector() sdk.Connector {
@@ -217,6 +229,23 @@ func (c Connector) HandleEvent(ctx context.Context, runtime sdk.Runtime, account
 	return c.processStreamEvent(ctx, runtime, account, event)
 }
 
+func (c Connector) HandleWebhookRequest(ctx context.Context, runtime sdk.Runtime, account sdk.ChannelAccount, req *http.Request) (*sdk.WebhookResponse, error) {
+	if req == nil || req.Body == nil {
+		return nil, fmt.Errorf("dingtalk webhook request body is required")
+	}
+	if err := verifyDingTalkWebhookRequest(account, req, time.Now().UTC()); err != nil {
+		return nil, err
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := c.HandleEvent(ctx, runtime, account, body); err != nil {
+		return nil, err
+	}
+	return &sdk.WebhookResponse{StatusCode: http.StatusOK}, nil
+}
+
 func (c Connector) processStreamEvent(ctx context.Context, runtime sdk.Runtime, account sdk.ChannelAccount, event *dingtalk.StreamEvent) (*EventResult, error) {
 	if runtime.Gateway == nil {
 		return nil, fmt.Errorf("dingtalk event handling requires sdk.Runtime.Gateway")
@@ -314,6 +343,44 @@ func (c Connector) processStreamEvent(ctx context.Context, runtime sdk.Runtime, 
 		return nil, err
 	}
 	return &EventResult{Type: "message", SessionUUID: sessionUUID, MessageUUID: messageUUID, Inbound: &inbound}, nil
+}
+
+func verifyDingTalkWebhookRequest(account sdk.ChannelAccount, req *http.Request, now time.Time) error {
+	timestamp := strings.TrimSpace(req.Header.Get("timestamp"))
+	signature := strings.TrimSpace(req.Header.Get("sign"))
+	if timestamp == "" || signature == "" {
+		return fmt.Errorf("dingtalk webhook signature headers are required")
+	}
+	secret := strings.TrimSpace(stringValue(account.Credential["client_secret"]))
+	if secret == "" {
+		return fmt.Errorf("dingtalk webhook signature verification requires client_secret")
+	}
+	millis, err := strconv.ParseInt(timestamp, 10, 64)
+	if err != nil {
+		return fmt.Errorf("dingtalk webhook timestamp is invalid")
+	}
+	sentAt := time.UnixMilli(millis)
+	age := now.Sub(sentAt)
+	if age < 0 {
+		age = -age
+	}
+	if age > time.Hour {
+		return fmt.Errorf("dingtalk webhook timestamp is expired")
+	}
+	expected := dingtalkWebhookSignature(timestamp, secret)
+	if unescaped, err := url.PathUnescape(signature); err == nil {
+		signature = unescaped
+	}
+	if !hmac.Equal([]byte(signature), []byte(expected)) {
+		return fmt.Errorf("dingtalk webhook signature mismatch")
+	}
+	return nil
+}
+
+func dingtalkWebhookSignature(timestamp, secret string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(timestamp + "\n" + secret))
+	return base64.StdEncoding.EncodeToString(mac.Sum(nil))
 }
 
 func BuildInboundMessage(workspaceUUID, channelUUID, accountUUID string, event *dingtalk.StreamEvent, text string) sdk.InboundMessage {

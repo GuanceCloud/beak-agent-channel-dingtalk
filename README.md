@@ -73,6 +73,17 @@ type EventConnector interface {
 
 Beak host can type assert this interface when its DingTalk Stream runtime receives a robot event.
 
+For raw DingTalk HTTP callback handling, the connector also implements:
+
+```go
+type WebhookRequestConnector interface {
+	sdk.Connector
+	HandleWebhookRequest(ctx context.Context, runtime sdk.Runtime, account sdk.ChannelAccount, req *http.Request) (*sdk.WebhookResponse, error)
+}
+```
+
+`HandleWebhookRequest` verifies DingTalk `timestamp` / `sign` headers using `client_secret`, processes the event body, and returns a platform ack response.
+
 ## Credential Schema
 
 `connector.CredentialSchema(ctx)` asks Beak UI to collect:
