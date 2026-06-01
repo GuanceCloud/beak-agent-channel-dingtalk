@@ -160,12 +160,23 @@ func (c Connector) Send(ctx context.Context, runtime sdk.Runtime, req sdk.Outbou
 		client.AccessTokenExpiresAt = accountState.AccessTokenExpires
 	}
 	at := dingtalkOutboundAtOptions(req)
+	format := dingtalkOutboundFormat(req)
 	if !boolValue(req.Raw["force_openapi"]) {
 		if webhook, ok := accountState.SessionWebhooks[outboundStateKey(req)]; ok && dingtalk.IsAllowedSessionWebhookURL(webhook.URL) && webhook.ExpiresAt.After(now.Add(10*time.Second)) {
-			resp, err := client.SendWebhookTextMessage(ctx, webhook.URL, dingtalk.SendWebhookTextRequest{
-				Text: req.Text,
-				At:   at,
-			})
+			var resp *dingtalk.WebhookSendResponse
+			var err error
+			if format == "markdown" {
+				resp, err = client.SendWebhookMarkdownMessage(ctx, webhook.URL, dingtalk.SendWebhookMarkdownRequest{
+					Title: dingtalkOutboundTitle(req),
+					Text:  req.Text,
+					At:    at,
+				})
+			} else {
+				resp, err = client.SendWebhookTextMessage(ctx, webhook.URL, dingtalk.SendWebhookTextRequest{
+					Text: req.Text,
+					At:   at,
+				})
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -176,6 +187,7 @@ func (c Connector) Send(ctx context.Context, runtime sdk.Runtime, req sdk.Outbou
 					"delivery_method": "session_webhook",
 					"chat_type":       req.ChatType,
 					"chat_id":         req.ChatID,
+					"msg_type":        format,
 					"response":        resp.Raw,
 				},
 			}, nil
@@ -192,16 +204,31 @@ func (c Connector) Send(ctx context.Context, runtime sdk.Runtime, req sdk.Outbou
 			return nil, err
 		}
 	}
-	resp, err := client.SendText(ctx, dingtalk.SendTextRequest{
-		ChatType:    req.ChatType,
-		ChatID:      strings.TrimSpace(req.ChatID),
-		Text:        req.Text,
-		RobotCode:   firstString(req.Raw["robot_code"], account.Credential["robot_code"], account.Credential["client_id"]),
-		MessageUUID: req.MessageUUID,
-		At:          at,
-	})
-	if err != nil {
-		return nil, err
+	robotCode := firstString(req.Raw["robot_code"], account.Credential["robot_code"], account.Credential["client_id"])
+	var resp *dingtalk.SendTextResponse
+	var sendErr error
+	if format == "markdown" {
+		resp, sendErr = client.SendMarkdown(ctx, dingtalk.SendMarkdownRequest{
+			ChatType:    req.ChatType,
+			ChatID:      strings.TrimSpace(req.ChatID),
+			Title:       dingtalkOutboundTitle(req),
+			Text:        req.Text,
+			RobotCode:   robotCode,
+			MessageUUID: req.MessageUUID,
+			At:          at,
+		})
+	} else {
+		resp, sendErr = client.SendText(ctx, dingtalk.SendTextRequest{
+			ChatType:    req.ChatType,
+			ChatID:      strings.TrimSpace(req.ChatID),
+			Text:        req.Text,
+			RobotCode:   robotCode,
+			MessageUUID: req.MessageUUID,
+			At:          at,
+		})
+	}
+	if sendErr != nil {
+		return nil, sendErr
 	}
 	return &sdk.SendResult{
 		Platform:    Platform,
@@ -212,6 +239,7 @@ func (c Connector) Send(ctx context.Context, runtime sdk.Runtime, req sdk.Outbou
 			"process_query_key": resp.ProcessQueryKey,
 			"chat_type":         req.ChatType,
 			"chat_id":           req.ChatID,
+			"msg_type":          format,
 			"response":          resp.Raw,
 		},
 	}, nil
@@ -489,6 +517,52 @@ func dingtalkOutboundAtOptions(req sdk.OutboundMessage) dingtalk.AtOptions {
 	out.AtDingtalkIDs = uniqueStringList(out.AtDingtalkIDs)
 	out.AtMobiles = uniqueStringList(out.AtMobiles)
 	return out
+}
+
+func dingtalkOutboundFormat(req sdk.OutboundMessage) string {
+	format := strings.ToLower(strings.TrimSpace(firstString(
+		req.Format,
+		req.Raw["format"],
+		req.Raw["content_type"],
+		req.Raw["content_format"],
+		req.Raw["contentType"],
+		req.Raw["contentFormat"],
+		req.Raw["message_format"],
+		req.Raw["messageFormat"],
+		req.Raw["msg_format"],
+		req.Raw["msgFormat"],
+		req.Raw["msg_type"],
+		req.Raw["msgType"],
+	)))
+	if format == "markdown" || format == "md" || format == "text/markdown" || format == "application/markdown" || format == "samplemarkdown" {
+		return "markdown"
+	}
+	return "text"
+}
+
+func dingtalkOutboundTitle(req sdk.OutboundMessage) string {
+	if title := strings.TrimSpace(firstString(req.Title, req.Raw["title"])); title != "" {
+		return title
+	}
+	return titleFromMarkdown(req.Text)
+}
+
+func titleFromMarkdown(text string) string {
+	for _, line := range strings.Split(strings.TrimSpace(text), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		line = strings.TrimSpace(strings.TrimLeft(line, "#*>- \t"))
+		if line == "" {
+			continue
+		}
+		if len([]rune(line)) > 20 {
+			return string([]rune(line)[:20])
+		}
+		return line
+	}
+	return "Message"
 }
 
 func dingtalkEventOwnershipValid(account sdk.ChannelAccount, event *dingtalk.StreamEvent) bool {

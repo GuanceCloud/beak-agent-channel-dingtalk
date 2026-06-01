@@ -169,18 +169,25 @@ type MentionIdentity struct {
 }
 
 type OutboundMessage struct {
-	WorkspaceUUID string            `json:"workspace_uuid"`
-	Platform      string            `json:"platform"`
-	AccountUUID   string            `json:"account_uuid"`
-	ChannelUUID   string            `json:"channel_uuid"`
-	SessionUUID   string            `json:"session_uuid"`
-	MessageUUID   string            `json:"message_uuid"`
-	ChatType      string            `json:"chat_type"`
-	ChatID        string            `json:"chat_id"`
-	Text          string            `json:"text"`
-	Mentions      []MentionIdentity `json:"mentions,omitempty"`
-	MentionAll    bool              `json:"mention_all,omitempty"`
-	Raw           map[string]any    `json:"raw,omitempty"`
+	WorkspaceUUID string `json:"workspace_uuid"`
+	Platform      string `json:"platform"`
+	AccountUUID   string `json:"account_uuid"`
+	ChannelUUID   string `json:"channel_uuid"`
+	SessionUUID   string `json:"session_uuid"`
+	MessageUUID   string `json:"message_uuid"`
+	ChatType      string `json:"chat_type"`
+	ChatID        string `json:"chat_id"`
+	Text          string `json:"text"`
+	// Format is a common host-facing field. Set "markdown" for rich rendering;
+	// each SDK maps it to platform-native delivery or falls back internally.
+	Format string `json:"format,omitempty"`
+	// Title is a common markdown title hint. Hosts should pass it uniformly and
+	// let the SDK decide whether the platform can use it.
+	Title      string            `json:"title,omitempty"`
+	Mentions   []MentionIdentity `json:"mentions,omitempty"`
+	MentionAll bool              `json:"mention_all,omitempty"`
+	// Raw is a platform-native escape hatch, not required for common text or markdown.
+	Raw map[string]any `json:"raw,omitempty"`
 }
 
 type SendResult struct {

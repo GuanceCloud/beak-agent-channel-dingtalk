@@ -324,6 +324,108 @@ func TestDingTalkConnectorSendUsesSessionWebhook(t *testing.T) {
 	}
 }
 
+func TestDingTalkConnectorSendMarkdownUsesSessionWebhook(t *testing.T) {
+	httpClient := &http.Client{Transport: testRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.String() != "https://oapi.dingtalk.com/robot/sendBySession?session=s1" {
+			t.Fatalf("unexpected request: %s", r.URL.String())
+		}
+		var body struct {
+			MsgType  string `json:"msgtype"`
+			Markdown struct {
+				Title string `json:"title"`
+				Text  string `json:"text"`
+			} `json:"markdown"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.MsgType != "markdown" || body.Markdown.Title != "日志查询" || body.Markdown.Text != "# 日志查询\n- 错误日志" {
+			t.Fatalf("body=%+v", body)
+		}
+		return testJSONResponse(map[string]any{"errcode": 0, "errmsg": "ok"})
+	})}
+	account := sdkAccount("account-1", "client-1", "secret-1", "https://api.dingtalk.test")
+	account.State = map[string]any{
+		"session_webhooks": map[string]any{
+			"group:cid-group": map[string]any{
+				"url":        "https://oapi.dingtalk.com/robot/sendBySession?session=s1",
+				"expires_at": time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano),
+			},
+		},
+	}
+	result, err := NewConnector().Send(context.Background(), sdk.Runtime{
+		HTTPClient: httpClient,
+		Account:    account,
+	}, sdk.OutboundMessage{
+		AccountUUID: "account-1",
+		ChatType:    sdk.ChatTypeGroup,
+		ChatID:      "cid-group",
+		Text:        "# 日志查询\n- 错误日志",
+		Format:      "markdown",
+		Title:       "日志查询",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Raw["delivery_method"] != "session_webhook" || result.Raw["msg_type"] != "markdown" {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestDingTalkConnectorSendMarkdownOpenAPI(t *testing.T) {
+	httpClient := &http.Client{Transport: testRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Path {
+		case "/v1.0/oauth2/accessToken":
+			return testJSONResponse(map[string]any{"accessToken": "token-1", "expireIn": 7200})
+		case "/v1.0/robot/groupMessages/send":
+			var body struct {
+				MsgKey   string `json:"msgKey"`
+				MsgParam string `json:"msgParam"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body.MsgKey != "sampleMarkdown" {
+				t.Fatalf("body=%+v", body)
+			}
+			var param map[string]string
+			if err := json.Unmarshal([]byte(body.MsgParam), &param); err != nil {
+				t.Fatal(err)
+			}
+			if param["title"] != "日志查询" || param["text"] != "# 日志查询\n- 错误日志" {
+				t.Fatalf("param=%+v", param)
+			}
+			return testJSONResponse(map[string]any{"processQueryKey": "pqk-markdown"})
+		default:
+			t.Fatalf("unexpected request: %s", r.URL.Path)
+		}
+		return nil, nil
+	})}
+	result, err := NewConnector().Send(context.Background(), sdk.Runtime{
+		HTTPClient: httpClient,
+		Account:    sdkAccount("account-1", "client-1", "secret-1", "https://api.dingtalk.test"),
+	}, sdk.OutboundMessage{
+		AccountUUID: "account-1",
+		ChatType:    sdk.ChatTypeGroup,
+		ChatID:      "cid-group",
+		Text:        "# 日志查询\n- 错误日志",
+		Raw:         map[string]any{"msg_type": "markdown", "title": "日志查询"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.MessageID != "pqk-markdown" || result.Raw["delivery_method"] != "openapi" || result.Raw["msg_type"] != "markdown" {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestDingTalkOutboundMarkdownFormatAliases(t *testing.T) {
+	req := sdk.OutboundMessage{Raw: map[string]any{"content_type": "text/markdown"}}
+	if got := dingtalkOutboundFormat(req); got != "markdown" {
+		t.Fatalf("dingtalkOutboundFormat() = %q, want markdown", got)
+	}
+}
+
 func TestDingTalkConnectorSendPersistsTokenForEmptyState(t *testing.T) {
 	var tokenCalls int
 	httpClient := &http.Client{Transport: testRoundTripFunc(func(r *http.Request) (*http.Response, error) {

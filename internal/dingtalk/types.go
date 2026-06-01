@@ -32,6 +32,16 @@ type SendTextRequest struct {
 	At          AtOptions
 }
 
+type SendMarkdownRequest struct {
+	ChatType    string
+	ChatID      string
+	Title       string
+	Text        string
+	RobotCode   string
+	MessageUUID string
+	At          AtOptions
+}
+
 type AtOptions struct {
 	AtUserIDs     []string
 	AtDingtalkIDs []string
@@ -55,6 +65,12 @@ type WebhookSendResponse struct {
 type SendWebhookTextRequest struct {
 	Text string
 	At   AtOptions
+}
+
+type SendWebhookMarkdownRequest struct {
+	Title string
+	Text  string
+	At    AtOptions
 }
 
 type StreamEvent struct {

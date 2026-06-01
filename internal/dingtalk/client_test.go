@@ -177,6 +177,51 @@ func TestClientSendWebhookText(t *testing.T) {
 	}
 }
 
+func TestClientSendMarkdown(t *testing.T) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/v1.0/robot/groupMessages/send" {
+			t.Fatalf("unexpected request: %s", r.URL.Path)
+		}
+		var body struct {
+			RobotCode          string `json:"robotCode"`
+			MsgKey             string `json:"msgKey"`
+			MsgParam           string `json:"msgParam"`
+			OpenConversationID string `json:"openConversationId"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.RobotCode != "robot-1" || body.MsgKey != "sampleMarkdown" || body.OpenConversationID != "cid-group" {
+			t.Fatalf("body=%+v", body)
+		}
+		var param map[string]string
+		if err := json.Unmarshal([]byte(body.MsgParam), &param); err != nil {
+			t.Fatal(err)
+		}
+		if param["title"] != "日志查询" || param["text"] != "# 日志查询\n- 错误日志\n\n@staff-1" {
+			t.Fatalf("param=%+v", param)
+		}
+		return jsonResponse(map[string]any{"processQueryKey": "pqk-markdown"})
+	})}
+	client := NewClient("https://api.dingtalk.test", "client-1", "secret-1", "robot-1")
+	client.HTTPClient = httpClient
+	client.AccessToken = "token-1"
+	client.AccessTokenExpiresAt = time.Now().Add(time.Hour)
+	resp, err := client.SendMarkdown(context.Background(), SendMarkdownRequest{
+		ChatType: ChatTypeGroup,
+		ChatID:   "cid-group",
+		Title:    "日志查询",
+		Text:     "# 日志查询\n- 错误日志",
+		At:       AtOptions{AtUserIDs: []string{"staff-1"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.ProcessQueryKey != "pqk-markdown" {
+		t.Fatalf("resp=%+v", resp)
+	}
+}
+
 func TestClientSendWebhookTextRejectsUntrustedURL(t *testing.T) {
 	client := NewClient("https://api.dingtalk.test", "client-1", "secret-1", "robot-1")
 	if _, err := client.SendWebhookText(context.Background(), "https://example.test/robot/sendBySession?session=s1", "reply"); err == nil || !strings.Contains(err.Error(), "not allowed") {
@@ -203,6 +248,44 @@ func TestClientSendWebhookTextRedactsURLQueryInError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "https://oapi.dingtalk.com/robot/sendBySession") {
 		t.Fatalf("error missing sanitized url: %v", err)
+	}
+}
+
+func TestClientSendWebhookMarkdownMessage(t *testing.T) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.String() != "https://oapi.dingtalk.com/robot/sendBySession?session=s1" {
+			t.Fatalf("unexpected request: %s", r.URL.String())
+		}
+		var body struct {
+			MsgType  string `json:"msgtype"`
+			Markdown struct {
+				Title string `json:"title"`
+				Text  string `json:"text"`
+			} `json:"markdown"`
+			At struct {
+				AtUserIDs []string `json:"atUserIds"`
+			} `json:"at"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.MsgType != "markdown" || body.Markdown.Title != "日志查询" || body.Markdown.Text != "# 日志查询\n- 错误日志\n\n@staff-1" {
+			t.Fatalf("body=%+v", body)
+		}
+		if len(body.At.AtUserIDs) != 1 || body.At.AtUserIDs[0] != "staff-1" {
+			t.Fatalf("at=%+v", body.At)
+		}
+		return jsonResponse(map[string]any{"errcode": 0, "errmsg": "ok"})
+	})}
+	client := NewClient("https://api.dingtalk.test", "client-1", "secret-1", "robot-1")
+	client.HTTPClient = httpClient
+	_, err := client.SendWebhookMarkdownMessage(context.Background(), "https://oapi.dingtalk.com/robot/sendBySession?session=s1", SendWebhookMarkdownRequest{
+		Title: "日志查询",
+		Text:  "# 日志查询\n- 错误日志",
+		At:    AtOptions{AtUserIDs: []string{"staff-1"}},
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
