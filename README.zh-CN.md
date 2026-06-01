@@ -37,7 +37,7 @@ v1 不支持：
 
 上游 [`DingTalk-Real-AI/dingtalk-openclaw-connector`](https://github.com/DingTalk-Real-AI/dingtalk-openclaw-connector) 的连接层使用 `dingtalk-stream` / `DWClient`。Stream callback 会先 ACK，robot event data 再交给 message handler；最近一次事件里的 `sessionWebhook` 会在可用时用于回复链路的文本发送。
 
-本 Go SDK 保留同样的平台契约，但把长连接归属放到 Beak host。SDK 通过 `HandleEvent` 接收 event body，把 `sessionWebhook` 存入 account state，并在 `Send` 时优先使用它；没有可用 `sessionWebhook` 时再 fallback 到钉钉 robot Open API。
+本 Go SDK 保留同样的平台契约，但把长连接归属放到 Beak host。SDK 通过 `HandleEvent` 接收 event body，只把钉钉域名下的 `sessionWebhook` 存入 account state，并在 `Send` 时优先使用它；没有可用 `sessionWebhook` 时再 fallback 到钉钉 robot Open API。
 
 `sessionWebhook` 是钉钉提供的临时回复 URL，不是 Beak 入站 webhook endpoint。
 
@@ -91,7 +91,6 @@ type WebhookRequestConnector interface {
 - `client_id`：必填，钉钉应用 AppKey/clientId。
 - `client_secret`：必填，敏感字段，钉钉应用 AppSecret/clientSecret。
 - `robot_code`：可选，发送 robot 消息时使用；不填时默认使用 `client_id`。
-- `base_url`：可选，钉钉 Open API base URL override；默认 `https://api.dingtalk.com`。
 - `chatbot_user_id`：可选，当前 bot 的加密 user id，用于过滤 self echo。
 - `chatbot_corp_id`：可选，当前 bot 的 corp id 元数据。
 
@@ -146,7 +145,7 @@ if result.Ignored {
 - `conversationType=2` 标准化为 group chat。
 - text、markdown、简单 richText 文本提取。
 - 按 `msgId` 或 Stream delivery message id 去重。
-- 捕获 `sessionWebhook`、`sessionWebhook` 过期时间和 `isInAtList` 元数据，并标准化映射 `mentioned_me`。
+- 捕获钉钉域名下的 `sessionWebhook`、`sessionWebhook` 过期时间和 `isInAtList` 元数据，并标准化映射 `mentioned_me`。
 - 配置 `chatbot_user_id` 时过滤 self echo。
 - 通过 `sdk.Gateway.EnsureChatSession` 创建或复用 session。
 - 通过 `sdk.Gateway.CreateMessage` 写入 Beak message。
@@ -165,7 +164,7 @@ _, err := connector.Send(ctx, runtime, sdk.OutboundMessage{
 })
 ```
 
-如果最近一次入站事件为该 chat 存过有效 `sessionWebhook`，`connector.Send` 会优先用该 `sessionWebhook` 回复。否则 SDK 会获取并缓存 access token：
+如果最近一次入站事件为该 chat 存过有效且通过域名校验的 `sessionWebhook`，`connector.Send` 会优先用该 `sessionWebhook` 回复。否则 SDK 会获取并缓存 access token：
 
 ```text
 POST /v1.0/oauth2/accessToken

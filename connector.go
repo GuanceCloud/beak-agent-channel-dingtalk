@@ -161,7 +161,7 @@ func (c Connector) Send(ctx context.Context, runtime sdk.Runtime, req sdk.Outbou
 	}
 	at := dingtalkOutboundAtOptions(req)
 	if !boolValue(req.Raw["force_openapi"]) {
-		if webhook, ok := accountState.SessionWebhooks[outboundStateKey(req)]; ok && webhook.URL != "" && webhook.ExpiresAt.After(now.Add(10*time.Second)) {
+		if webhook, ok := accountState.SessionWebhooks[outboundStateKey(req)]; ok && dingtalk.IsAllowedSessionWebhookURL(webhook.URL) && webhook.ExpiresAt.After(now.Add(10*time.Second)) {
 			resp, err := client.SendWebhookTextMessage(ctx, webhook.URL, dingtalk.SendWebhookTextRequest{
 				Text: req.Text,
 				At:   at,
@@ -302,6 +302,7 @@ func (c Connector) processStreamEvent(ctx context.Context, runtime sdk.Runtime, 
 		SessionUUID:   sessionUUID,
 		SenderID:      sdk.IMPersonParticipantID(Platform, chat.ChatType, chat.ChatID, chat.SenderID),
 		Content:       text,
+		DedupeKey:     key,
 		Metadata: map[string]any{
 			"source":                       Platform,
 			"platform":                     Platform,
@@ -316,7 +317,7 @@ func (c Connector) processStreamEvent(ctx context.Context, runtime sdk.Runtime, 
 			"dingtalk_message_id":          event.MsgID,
 			"dingtalk_delivery_message_id": event.DeliveryMessageID,
 			"dingtalk_message_type":        event.MsgType,
-			"dingtalk_session_webhook":     event.SessionWebhook,
+			"dingtalk_has_session_webhook": dingtalk.IsAllowedSessionWebhookURL(event.SessionWebhook),
 			"dingtalk_chatbot_user_id":     event.ChatbotUserID,
 			"dingtalk_chatbot_corp_id":     event.ChatbotCorpID,
 			"inbound_message":              inbound,
@@ -333,7 +334,7 @@ func (c Connector) processStreamEvent(ctx context.Context, runtime sdk.Runtime, 
 	if event.ChatbotCorpID != "" {
 		state.ChatbotCorpID = event.ChatbotCorpID
 	}
-	if event.SessionWebhook != "" {
+	if dingtalk.IsAllowedSessionWebhookURL(event.SessionWebhook) {
 		state.SessionWebhooks[chat.StateKey()] = beakstate.Webhook{
 			URL:       event.SessionWebhook,
 			ExpiresAt: timeFromUnixMilli(event.SessionWebhookExpiredTime),
@@ -410,7 +411,7 @@ func BuildInboundMessage(workspaceUUID, channelUUID, accountUUID string, event *
 			"delivery_message_id":        event.DeliveryMessageID,
 			"message_type":               event.MsgType,
 			"robot_code":                 event.RobotCode,
-			"session_webhook":            event.SessionWebhook,
+			"has_session_webhook":        dingtalk.IsAllowedSessionWebhookURL(event.SessionWebhook),
 			"session_webhook_expires_at": timeFromUnixMilli(event.SessionWebhookExpiredTime),
 			"is_in_at_list":              event.IsInAtList,
 			"is_at_all":                  event.IsAtAll,
@@ -647,9 +648,6 @@ func clientFromAccount(runtime sdk.Runtime, account sdk.ChannelAccount) *dingtal
 }
 
 func baseURLFromCredential(credential map[string]any) string {
-	if baseURL := strings.TrimSpace(stringValue(credential["base_url"])); baseURL != "" {
-		return baseURL
-	}
 	return dingtalk.DefaultBaseURL
 }
 

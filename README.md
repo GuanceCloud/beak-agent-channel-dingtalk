@@ -37,7 +37,7 @@ v1 does not support:
 
 The upstream [`DingTalk-Real-AI/dingtalk-openclaw-connector`](https://github.com/DingTalk-Real-AI/dingtalk-openclaw-connector) implementation uses `dingtalk-stream` / `DWClient` in its connection layer. The Stream callback is ACKed immediately, the robot event data is parsed and passed to the message handler, and `sessionWebhook` from the latest event is used for reply-path text delivery when present.
 
-This Go SDK keeps the same platform contract but moves the long-running Stream connection to Beak host. The SDK receives event bodies through `HandleEvent`, stores `sessionWebhook` in account state, and uses it in `Send` before falling back to DingTalk robot Open API.
+This Go SDK keeps the same platform contract but moves the long-running Stream connection to Beak host. The SDK receives event bodies through `HandleEvent`, stores only DingTalk-domain `sessionWebhook` URLs in account state, and uses them in `Send` before falling back to DingTalk robot Open API.
 
 `sessionWebhook` is DingTalk's temporary reply URL. It is not a Beak inbound webhook endpoint.
 
@@ -91,7 +91,6 @@ type WebhookRequestConnector interface {
 - `client_id`: required DingTalk application AppKey/clientId.
 - `client_secret`: required secret DingTalk application AppSecret/clientSecret.
 - `robot_code`: optional robotCode override. Defaults to `client_id`.
-- `base_url`: optional DingTalk Open API base URL override. Defaults to `https://api.dingtalk.com`.
 - `chatbot_user_id`: optional encrypted chatbot user id for self-echo filtering.
 - `chatbot_corp_id`: optional DingTalk corp id metadata for this bot.
 
@@ -146,7 +145,7 @@ if result.Ignored {
 - `conversationType=2` normalized as group chat.
 - Text, markdown, and simple richText extraction.
 - Dedupe by `msgId` or Stream delivery message id.
-- `sessionWebhook`, `sessionWebhook` expiry, `isInAtList` metadata capture, and standard `mentioned_me` mapping.
+- DingTalk-domain `sessionWebhook`, `sessionWebhook` expiry, `isInAtList` metadata capture, and standard `mentioned_me` mapping.
 - Self-echo filtering when `chatbot_user_id` is available.
 - `sdk.Gateway.EnsureChatSession` for session creation or reuse.
 - `sdk.Gateway.CreateMessage` for Beak message writes.
@@ -165,7 +164,7 @@ _, err := connector.Send(ctx, runtime, sdk.OutboundMessage{
 })
 ```
 
-If the latest inbound event stored a valid `sessionWebhook` for this chat, `connector.Send` replies through that `sessionWebhook`. Otherwise the SDK gets and caches an access token:
+If the latest inbound event stored a valid DingTalk-domain `sessionWebhook` for this chat, `connector.Send` replies through that `sessionWebhook`. Otherwise the SDK gets and caches an access token:
 
 ```text
 POST /v1.0/oauth2/accessToken

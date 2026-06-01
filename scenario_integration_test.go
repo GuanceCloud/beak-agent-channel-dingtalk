@@ -355,7 +355,7 @@ func TestDingTalkScenarioCredentialInboundAndFixedReply(t *testing.T) {
 }
 
 func TestDingTalkScenarioMentionsInboundAndSessionWebhookOutbound(t *testing.T) {
-	const sessionWebhook = "https://oapi.dingtalk.test/robot/sendBySession?session=mention"
+	const sessionWebhook = "https://oapi.dingtalk.com/robot/sendBySession?session=mention"
 	connector := NewConnector()
 	eventConnector, ok := any(connector).(EventConnector)
 	if !ok {
@@ -460,7 +460,7 @@ func TestDingTalkScenarioMentionsInboundAndSessionWebhookOutbound(t *testing.T) 
 }
 
 func TestDingTalkScenarioExpiredSessionWebhookFallsBackToOpenAPI(t *testing.T) {
-	expiredWebhook := "https://oapi.dingtalk.test/robot/sendBySession?session=expired"
+	expiredWebhook := "https://oapi.dingtalk.com/robot/sendBySession?session=expired"
 	account := scenarioDingTalkAccount("account-expired", "client-expired", "secret-expired", "robot-expired", "bot-expired")
 	account.State = map[string]any{
 		"session_webhooks": map[string]any{

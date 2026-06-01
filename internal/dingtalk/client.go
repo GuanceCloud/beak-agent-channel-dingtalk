@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"strings"
 	"time"
 )
@@ -132,6 +133,9 @@ func (c *Client) SendWebhookTextMessage(ctx context.Context, sessionWebhook stri
 	sessionWebhook = strings.TrimSpace(sessionWebhook)
 	if sessionWebhook == "" {
 		return nil, fmt.Errorf("session_webhook is required")
+	}
+	if !IsAllowedSessionWebhookURL(sessionWebhook) {
+		return nil, fmt.Errorf("session_webhook url is not allowed")
 	}
 	if strings.TrimSpace(req.Text) == "" {
 		return nil, fmt.Errorf("text is required")
@@ -265,7 +269,10 @@ func (c *Client) doJSONURL(ctx context.Context, method, targetURL string, body a
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		if urlErr, ok := err.(*neturl.Error); ok {
+			return fmt.Errorf("%s %s failed: %v", method, sanitizeURLForError(targetURL), urlErr.Err)
+		}
+		return fmt.Errorf("%s %s failed: %w", method, sanitizeURLForError(targetURL), err)
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(resp.Body)
@@ -273,7 +280,7 @@ func (c *Client) doJSONURL(ctx context.Context, method, targetURL string, body a
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("%s %s failed: status=%d body=%s", method, targetURL, resp.StatusCode, string(data))
+		return fmt.Errorf("%s %s failed: status=%d body=%s", method, sanitizeURLForError(targetURL), resp.StatusCode, string(data))
 	}
 	if out == nil || len(bytes.TrimSpace(data)) == 0 {
 		return nil
@@ -292,4 +299,27 @@ func (c *Client) doJSONURL(ctx context.Context, method, targetURL string, body a
 
 func (c *Client) url(path string) string {
 	return strings.TrimRight(c.BaseURL, "/") + "/" + strings.TrimLeft(path, "/")
+}
+
+func IsAllowedSessionWebhookURL(rawURL string) bool {
+	parsed, err := neturl.Parse(strings.TrimSpace(rawURL))
+	if err != nil || parsed == nil {
+		return false
+	}
+	if !strings.EqualFold(parsed.Scheme, "https") {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	return host == "dingtalk.com" || strings.HasSuffix(host, ".dingtalk.com")
+}
+
+func sanitizeURLForError(rawURL string) string {
+	parsed, err := neturl.Parse(strings.TrimSpace(rawURL))
+	if err != nil || parsed == nil {
+		return "<invalid-url>"
+	}
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
 }

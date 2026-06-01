@@ -222,6 +222,7 @@ type CreateMessageRequest struct {
 	SessionUUID   string
 	SenderID      string
 	Content       string
+	DedupeKey     string
 	Metadata      map[string]any
 }
 

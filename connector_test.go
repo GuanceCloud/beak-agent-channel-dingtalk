@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/GuanceCloud/beak-agent-channel-dingtalk/sdk"
+	beakstate "github.com/GuanceCloud/beak-agent-channel-dingtalk/state"
 )
 
 func TestDingTalkConnectorMetadataAndSchema(t *testing.T) {
@@ -47,6 +48,9 @@ func TestDingTalkConnectorMetadataAndSchema(t *testing.T) {
 	}
 	if !schema.Properties["client_secret"].Secret {
 		t.Fatalf("client_secret should be secret")
+	}
+	if _, ok := schema.Properties["base_url"]; ok {
+		t.Fatalf("base_url must not be exposed in credential schema")
 	}
 }
 
@@ -111,7 +115,7 @@ func TestDingTalkConnectorEventCreatesMessageAndDedupes(t *testing.T) {
 		"chatbotUserId":"bot-1",
 		"chatbotCorpId":"corp-1",
 		"robotCode":"robot-1",
-		"sessionWebhook":"https://oapi.dingtalk.test/robot/sendBySession?session=s1",
+		"sessionWebhook":"https://oapi.dingtalk.com/robot/sendBySession?session=s1",
 		"sessionWebhookExpiredTime":4102444800000
 	}`)
 	runtime := sdk.Runtime{
@@ -148,6 +152,9 @@ func TestDingTalkConnectorEventCreatesMessageAndDedupes(t *testing.T) {
 	if gateway.messages[0].SenderID != "im:dingtalk:group:cid-group:user:staff-1" || gateway.messages[0].Content != "hello group" {
 		t.Fatalf("message=%+v", gateway.messages[0])
 	}
+	if gateway.messages[0].DedupeKey != "account-1:message:msg-1" {
+		t.Fatalf("dedupe key=%q", gateway.messages[0].DedupeKey)
+	}
 	gateway.mu.Unlock()
 
 	state := store.state("account-1")
@@ -170,6 +177,37 @@ func TestDingTalkConnectorEventCreatesMessageAndDedupes(t *testing.T) {
 	defer gateway.mu.Unlock()
 	if len(gateway.messages) != 1 {
 		t.Fatalf("duplicate created message=%+v", gateway.messages)
+	}
+}
+
+func TestDingTalkConnectorEventIgnoresUntrustedSessionWebhook(t *testing.T) {
+	connector := newTestEventConnector(t)
+	gateway := &fakeSDKGateway{}
+	store := newFakeSDKAccountStore()
+	account := sdkAccount("account-1", "client-1", "secret-1", "")
+	_, err := connector.HandleEvent(context.Background(), sdk.Runtime{
+		WorkspaceUUID: "workspace-1",
+		Channel:       sdk.Channel{UUID: "channel-1", WorkspaceUUID: "workspace-1", Platform: Platform},
+		Account:       account,
+		Gateway:       gateway,
+		AccountStore:  store,
+	}, account, []byte(`{
+		"conversationType":"2",
+		"conversationId":"cid-group",
+		"senderStaffId":"staff-1",
+		"msgId":"msg-untrusted-webhook",
+		"msgtype":"text",
+		"text":{"content":"hello group"},
+		"sessionWebhook":"https://example.test/robot/sendBySession?session=s1",
+		"sessionWebhookExpiredTime":4102444800000
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := store.state("account-1")
+	webhooks, _ := state["session_webhooks"].(map[string]beakstate.Webhook)
+	if len(webhooks) != 0 {
+		t.Fatalf("untrusted webhook should not be stored: %+v", webhooks)
 	}
 }
 
@@ -230,7 +268,7 @@ func TestDingTalkConnectorSendUsesSessionWebhook(t *testing.T) {
 	var sawWebhook bool
 	httpClient := &http.Client{Transport: testRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		sawWebhook = true
-		if r.URL.String() != "https://oapi.dingtalk.test/robot/sendBySession?session=s1" {
+		if r.URL.String() != "https://oapi.dingtalk.com/robot/sendBySession?session=s1" {
 			t.Fatalf("unexpected request: %s", r.URL.String())
 		}
 		var body struct {
@@ -259,7 +297,7 @@ func TestDingTalkConnectorSendUsesSessionWebhook(t *testing.T) {
 	account.State = map[string]any{
 		"session_webhooks": map[string]any{
 			"group:cid-group": map[string]any{
-				"url":        "https://oapi.dingtalk.test/robot/sendBySession?session=s1",
+				"url":        "https://oapi.dingtalk.com/robot/sendBySession?session=s1",
 				"expires_at": time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano),
 			},
 		},

@@ -2,7 +2,13 @@ package state
 
 import (
 	"fmt"
+	"sort"
 	"time"
+)
+
+const (
+	maxTrackedStateKeys = 4096
+	trackedStateTTL     = 7 * 24 * time.Hour
 )
 
 type AccountState struct {
@@ -57,6 +63,48 @@ func TouchAccount(account *AccountState) error {
 		return fmt.Errorf("account_id is required")
 	}
 	account.EnsureMaps()
-	account.UpdatedAt = time.Now().UTC()
+	now := time.Now().UTC()
+	pruneExpiredWebhooks(account.SessionWebhooks, now)
+	pruneTimestampMap(account.InboundSeen, now)
+	pruneTimestampMap(account.SentBeakMessages, now)
+	account.UpdatedAt = now
 	return nil
+}
+
+func pruneExpiredWebhooks(values map[string]Webhook, now time.Time) {
+	for key, webhook := range values {
+		if !webhook.ExpiresAt.IsZero() && webhook.ExpiresAt.Before(now) {
+			delete(values, key)
+		}
+	}
+}
+
+func pruneTimestampMap(values map[string]string, now time.Time) {
+	for key, raw := range values {
+		if ts, err := time.Parse(time.RFC3339Nano, raw); err == nil && now.Sub(ts) > trackedStateTTL {
+			delete(values, key)
+		}
+	}
+	if len(values) <= maxTrackedStateKeys {
+		return
+	}
+	type item struct {
+		key string
+		at  time.Time
+	}
+	items := make([]item, 0, len(values))
+	for key, raw := range values {
+		ts, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			ts = time.Time{}
+		}
+		items = append(items, item{key: key, at: ts})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].at.Before(items[j].at)
+	})
+	for len(values) > maxTrackedStateKeys && len(items) > 0 {
+		delete(values, items[0].key)
+		items = items[1:]
+	}
 }

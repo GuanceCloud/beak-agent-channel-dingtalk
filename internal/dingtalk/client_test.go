@@ -149,7 +149,7 @@ func TestClientTokenWithExpiryCachesToken(t *testing.T) {
 
 func TestClientSendWebhookText(t *testing.T) {
 	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		if r.URL.String() != "https://oapi.dingtalk.test/robot/sendBySession?session=s1" {
+		if r.URL.String() != "https://oapi.dingtalk.com/robot/sendBySession?session=s1" {
 			t.Fatalf("unexpected request: %s", r.URL.String())
 		}
 		var body struct {
@@ -168,7 +168,7 @@ func TestClientSendWebhookText(t *testing.T) {
 	})}
 	client := NewClient("https://api.dingtalk.test", "client-1", "secret-1", "robot-1")
 	client.HTTPClient = httpClient
-	resp, err := client.SendWebhookText(context.Background(), "https://oapi.dingtalk.test/robot/sendBySession?session=s1", "reply")
+	resp, err := client.SendWebhookText(context.Background(), "https://oapi.dingtalk.com/robot/sendBySession?session=s1", "reply")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,9 +177,38 @@ func TestClientSendWebhookText(t *testing.T) {
 	}
 }
 
+func TestClientSendWebhookTextRejectsUntrustedURL(t *testing.T) {
+	client := NewClient("https://api.dingtalk.test", "client-1", "secret-1", "robot-1")
+	if _, err := client.SendWebhookText(context.Background(), "https://example.test/robot/sendBySession?session=s1", "reply"); err == nil || !strings.Contains(err.Error(), "not allowed") {
+		t.Fatalf("SendWebhookText() error=%v, want not allowed", err)
+	}
+}
+
+func TestClientSendWebhookTextRedactsURLQueryInError(t *testing.T) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusInternalServerError,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"errcode":500}`)),
+		}, nil
+	})}
+	client := NewClient("https://api.dingtalk.test", "client-1", "secret-1", "robot-1")
+	client.HTTPClient = httpClient
+	_, err := client.SendWebhookText(context.Background(), "https://oapi.dingtalk.com/robot/sendBySession?session=secret-token", "reply")
+	if err == nil {
+		t.Fatal("SendWebhookText() error=nil, want status error")
+	}
+	if strings.Contains(err.Error(), "secret-token") || strings.Contains(err.Error(), "session=") {
+		t.Fatalf("error leaks query: %v", err)
+	}
+	if !strings.Contains(err.Error(), "https://oapi.dingtalk.com/robot/sendBySession") {
+		t.Fatalf("error missing sanitized url: %v", err)
+	}
+}
+
 func TestClientSendWebhookTextMessageMentions(t *testing.T) {
 	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		if r.URL.String() != "https://oapi.dingtalk.test/robot/sendBySession?session=s1" {
+		if r.URL.String() != "https://oapi.dingtalk.com/robot/sendBySession?session=s1" {
 			t.Fatalf("unexpected request: %s", r.URL.String())
 		}
 		var body struct {
@@ -210,7 +239,7 @@ func TestClientSendWebhookTextMessageMentions(t *testing.T) {
 	})}
 	client := NewClient("https://api.dingtalk.test", "client-1", "secret-1", "robot-1")
 	client.HTTPClient = httpClient
-	_, err := client.SendWebhookTextMessage(context.Background(), "https://oapi.dingtalk.test/robot/sendBySession?session=s1", SendWebhookTextRequest{
+	_, err := client.SendWebhookTextMessage(context.Background(), "https://oapi.dingtalk.com/robot/sendBySession?session=s1", SendWebhookTextRequest{
 		Text: "reply",
 		At: AtOptions{
 			AtUserIDs:     []string{"staff-1"},
@@ -241,7 +270,7 @@ func TestClientSendWebhookTextMessageMentionBoundary(t *testing.T) {
 	})}
 	client := NewClient("https://api.dingtalk.test", "client-1", "secret-1", "robot-1")
 	client.HTTPClient = httpClient
-	_, err := client.SendWebhookTextMessage(context.Background(), "https://oapi.dingtalk.test/robot/sendBySession?session=s1", SendWebhookTextRequest{
+	_, err := client.SendWebhookTextMessage(context.Background(), "https://oapi.dingtalk.com/robot/sendBySession?session=s1", SendWebhookTextRequest{
 		Text: "reply @staff-12",
 		At:   AtOptions{AtUserIDs: []string{"staff-1"}},
 	})

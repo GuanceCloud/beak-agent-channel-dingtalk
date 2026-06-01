@@ -94,11 +94,6 @@ func (Channel) SettingsSchema() SettingsSchema {
 				"title":       "Robot Code",
 				"description": "Optional robotCode override. Defaults to client_id.",
 			},
-			"base_url": map[string]any{
-				"type":        "string",
-				"title":       "Open API Base URL",
-				"description": "Optional DingTalk Open API base URL override.",
-			},
 			"chatbot_user_id": map[string]any{
 				"type":        "string",
 				"title":       "Chatbot User ID",
