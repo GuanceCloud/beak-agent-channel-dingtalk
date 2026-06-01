@@ -150,9 +150,9 @@ if result.Ignored {
 - 通过 `sdk.Gateway.EnsureChatSession` 创建或复用 session。
 - 通过 `sdk.Gateway.CreateMessage` 写入 Beak message。
 
-## 发送文本
+## 发送文本和 Markdown
 
-Gateway 可以通过 `connector.Send` 把 agent 输出发回钉钉：
+Gateway 可以通过 `connector.Send` 把 agent 输出发回钉钉。`Format` / `Title` 是三个 SDK 的通用字段，Beak host 应该从统一出站模型逐字段复制，不要按平台分支改写；钉钉会把 `Format="markdown"` 映射成钉钉 markdown 消息，默认仍是纯文本：
 
 ```go
 _, err := connector.Send(ctx, runtime, sdk.OutboundMessage{
@@ -160,11 +160,13 @@ _, err := connector.Send(ctx, runtime, sdk.OutboundMessage{
 	ChatType:    sdk.ChatTypeGroup,
 	ChatID:      "open-conversation-id",
 	Text:        "reply text",
+	Format:      "markdown", // 可选
+	Title:       "Reply",    // 可选 markdown title
 	MessageUUID: messageUUID,
 })
 ```
 
-如果最近一次入站事件为该 chat 存过有效且通过域名校验的 `sessionWebhook`，`connector.Send` 会优先用该 `sessionWebhook` 回复。否则 SDK 会获取并缓存 access token：
+如果最近一次入站事件为该 chat 存过有效且通过域名校验的 `sessionWebhook`，`connector.Send` 会优先用该 `sessionWebhook` 回复；markdown 会使用 webhook `msgtype=markdown`。否则 SDK 会获取并缓存 access token，并用 `msgKey=sampleMarkdown` 发送 markdown：
 
 ```text
 POST /v1.0/oauth2/accessToken

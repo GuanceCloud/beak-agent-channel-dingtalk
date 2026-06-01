@@ -125,6 +125,54 @@ func (c *Client) SendText(ctx context.Context, req SendTextRequest) (*SendTextRe
 	return &resp, nil
 }
 
+func (c *Client) SendMarkdown(ctx context.Context, req SendMarkdownRequest) (*SendTextResponse, error) {
+	if strings.TrimSpace(req.ChatID) == "" {
+		return nil, fmt.Errorf("chat_id is required")
+	}
+	if strings.TrimSpace(req.Text) == "" {
+		return nil, fmt.Errorf("text is required")
+	}
+	token := strings.TrimSpace(c.AccessToken)
+	if token == "" {
+		var err error
+		token, err = c.Token(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+	robotCode := strings.TrimSpace(req.RobotCode)
+	if robotCode == "" {
+		robotCode = strings.TrimSpace(c.RobotCode)
+	}
+	if robotCode == "" {
+		robotCode = strings.TrimSpace(c.ClientID)
+	}
+	msgParam, err := json.Marshal(markdownMsgParam(req.Title, req.Text, req.At))
+	if err != nil {
+		return nil, err
+	}
+	body := map[string]any{
+		"robotCode": robotCode,
+		"msgKey":    "sampleMarkdown",
+		"msgParam":  string(msgParam),
+	}
+	path := "/v1.0/robot/oToMessages/batchSend"
+	if req.ChatType == ChatTypeGroup {
+		path = "/v1.0/robot/groupMessages/send"
+		body["openConversationId"] = req.ChatID
+	} else {
+		body["userIds"] = []string{req.ChatID}
+	}
+	var resp SendTextResponse
+	if err := c.doJSON(ctx, http.MethodPost, path, body, &resp, withAccessToken(token)); err != nil {
+		return nil, err
+	}
+	if resp.Code != "" {
+		return nil, fmt.Errorf("send markdown failed: code=%s message=%s", resp.Code, resp.Message)
+	}
+	return &resp, nil
+}
+
 func (c *Client) SendWebhookText(ctx context.Context, sessionWebhook string, text string) (*WebhookSendResponse, error) {
 	return c.SendWebhookTextMessage(ctx, sessionWebhook, SendWebhookTextRequest{Text: text})
 }
@@ -159,8 +207,71 @@ func (c *Client) SendWebhookTextMessage(ctx context.Context, sessionWebhook stri
 	return &resp, nil
 }
 
+func (c *Client) SendWebhookMarkdownMessage(ctx context.Context, sessionWebhook string, req SendWebhookMarkdownRequest) (*WebhookSendResponse, error) {
+	sessionWebhook = strings.TrimSpace(sessionWebhook)
+	if sessionWebhook == "" {
+		return nil, fmt.Errorf("session_webhook is required")
+	}
+	if !IsAllowedSessionWebhookURL(sessionWebhook) {
+		return nil, fmt.Errorf("session_webhook url is not allowed")
+	}
+	if strings.TrimSpace(req.Text) == "" {
+		return nil, fmt.Errorf("text is required")
+	}
+	body := map[string]any{
+		"msgtype": "markdown",
+		"markdown": map[string]string{
+			"title": markdownTitle(req.Title, req.Text),
+			"text":  markdownWithAtSuffix(req.Text, req.At),
+		},
+	}
+	if at := webhookAtParam(req.At); len(at) > 0 {
+		body["at"] = at
+	}
+	var resp WebhookSendResponse
+	if err := c.doJSONURL(ctx, http.MethodPost, sessionWebhook, body, &resp); err != nil {
+		return nil, err
+	}
+	if resp.ErrCode != 0 {
+		return nil, fmt.Errorf("session webhook send markdown failed: code=%d message=%s", resp.ErrCode, resp.ErrMsg)
+	}
+	return &resp, nil
+}
+
 func textMsgParam(text string, at AtOptions) map[string]any {
 	return map[string]any{"content": textWithAtSuffix(text, at)}
+}
+
+func markdownMsgParam(title string, text string, at AtOptions) map[string]any {
+	return map[string]any{
+		"title": markdownTitle(title, text),
+		"text":  markdownWithAtSuffix(text, at),
+	}
+}
+
+func markdownTitle(title string, text string) string {
+	if title = strings.TrimSpace(title); title != "" {
+		return title
+	}
+	return titleFromMarkdown(text)
+}
+
+func titleFromMarkdown(text string) string {
+	for _, line := range strings.Split(strings.TrimSpace(text), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		line = strings.TrimSpace(strings.TrimLeft(line, "#*>- \t"))
+		if line == "" {
+			continue
+		}
+		if len([]rune(line)) > 20 {
+			return string([]rune(line)[:20])
+		}
+		return line
+	}
+	return "Message"
 }
 
 func textWithAtSuffix(text string, at AtOptions) string {
@@ -176,6 +287,28 @@ func textWithAtSuffix(text string, at AtOptions) string {
 		out = strings.TrimSpace(out + " @all")
 	}
 	return out
+}
+
+func markdownWithAtSuffix(text string, at AtOptions) string {
+	out := strings.TrimSpace(text)
+	var suffixes []string
+	ids := append(uniqueStrings(at.AtDingtalkIDs), uniqueStrings(at.AtUserIDs)...)
+	ids = append(ids, uniqueStrings(at.AtMobiles)...)
+	for _, id := range ids {
+		if id != "" && !containsAtToken(out, id) {
+			suffixes = append(suffixes, "@"+id)
+		}
+	}
+	if at.AtAll && !strings.Contains(strings.ToLower(out), "@all") {
+		suffixes = append(suffixes, "@all")
+	}
+	if len(suffixes) == 0 {
+		return out
+	}
+	if out == "" {
+		return strings.Join(suffixes, " ")
+	}
+	return out + "\n\n" + strings.Join(suffixes, " ")
 }
 
 func containsAtToken(text string, id string) bool {

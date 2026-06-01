@@ -150,9 +150,9 @@ if result.Ignored {
 - `sdk.Gateway.EnsureChatSession` for session creation or reuse.
 - `sdk.Gateway.CreateMessage` for Beak message writes.
 
-## Sending Text
+## Sending Text and Markdown
 
-Gateway can call `connector.Send` to return agent output to DingTalk:
+Gateway can call `connector.Send` to return agent output to DingTalk. `Format` / `Title` are common across all SDKs and should be copied from the host outbound model without platform branching; DingTalk maps `Format="markdown"` to DingTalk markdown messages, while plain text remains the default:
 
 ```go
 _, err := connector.Send(ctx, runtime, sdk.OutboundMessage{
@@ -160,11 +160,13 @@ _, err := connector.Send(ctx, runtime, sdk.OutboundMessage{
 	ChatType:    sdk.ChatTypeGroup,
 	ChatID:      "open-conversation-id",
 	Text:        "reply text",
+	Format:      "markdown", // optional
+	Title:       "Reply",    // optional markdown title
 	MessageUUID: messageUUID,
 })
 ```
 
-If the latest inbound event stored a valid DingTalk-domain `sessionWebhook` for this chat, `connector.Send` replies through that `sessionWebhook`. Otherwise the SDK gets and caches an access token:
+If the latest inbound event stored a valid DingTalk-domain `sessionWebhook` for this chat, `connector.Send` replies through that `sessionWebhook`; markdown uses webhook `msgtype=markdown`. Otherwise the SDK gets and caches an access token and sends markdown with `msgKey=sampleMarkdown`:
 
 ```text
 POST /v1.0/oauth2/accessToken
