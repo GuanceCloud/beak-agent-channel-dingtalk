@@ -54,6 +54,71 @@ func TestDingTalkConnectorMetadataAndSchema(t *testing.T) {
 	}
 }
 
+func TestDingTalkConnectorValidateCredentialFetchesAccessToken(t *testing.T) {
+	var sawToken bool
+	httpClient := &http.Client{Transport: testRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/v1.0/oauth2/accessToken" {
+			t.Fatalf("unexpected request: %s %s", req.Method, req.URL.Path)
+		}
+		sawToken = true
+		if req.Method != http.MethodPost {
+			t.Fatalf("token method=%s", req.Method)
+		}
+		var body map[string]string
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["appKey"] != "client_validate" || body["appSecret"] != "secret_validate" {
+			t.Fatalf("token body=%+v", body)
+		}
+		return testJSONResponse(map[string]any{"accessToken": "access-token-1", "expireIn": 3600})
+	})}
+
+	result, err := NewConnector().ValidateCredential(context.Background(), sdk.CredentialValidationRequest{
+		Credential: map[string]any{
+			"client_id":     "client_validate",
+			"client_secret": "secret_validate",
+			"robot_code":    "robot_validate",
+		},
+		Runtime: sdk.Runtime{HTTPClient: httpClient},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sawToken {
+		t.Fatal("token endpoint was not called")
+	}
+	if !result.Valid || result.AccountKey != "robot_validate" || result.DisplayName != "robot_validate" {
+		t.Fatalf("result=%+v", result)
+	}
+	if result.Credential["robot_code"] != "robot_validate" || result.State["access_token"] != "access-token-1" {
+		t.Fatalf("credential=%+v state=%+v", result.Credential, result.State)
+	}
+	if result.Metadata["robot_code"] != "robot_validate" {
+		t.Fatalf("metadata=%+v", result.Metadata)
+	}
+}
+
+func TestDingTalkConnectorValidateCredentialReturnsInvalidOnTokenFailure(t *testing.T) {
+	httpClient := &http.Client{Transport: testRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/v1.0/oauth2/accessToken" {
+			t.Fatalf("unexpected request: %s", req.URL.Path)
+		}
+		return testJSONResponse(map[string]any{"code": "InvalidAppSecret", "message": "bad secret"})
+	})}
+
+	result, err := NewConnector().ValidateCredential(context.Background(), sdk.CredentialValidationRequest{
+		Credential: map[string]any{"client_id": "client_bad", "client_secret": "bad", "robot_code": "robot_bad"},
+		Runtime:    sdk.Runtime{HTTPClient: httpClient},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Valid || result.AccountKey != "robot_bad" || !strings.Contains(result.Error, "bad secret") {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
 func newTestEventConnector(t *testing.T) EventConnector {
 	t.Helper()
 	connector, ok := NewConnector().(EventConnector)

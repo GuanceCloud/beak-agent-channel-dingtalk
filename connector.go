@@ -90,6 +90,44 @@ func (c Connector) CredentialSchema(context.Context) sdk.CredentialSchema {
 	}
 }
 
+func (Connector) ValidateCredential(ctx context.Context, req sdk.CredentialValidationRequest) (*sdk.CredentialValidationResult, error) {
+	credential := cloneMap(req.Credential)
+	state := cloneMap(req.State)
+	client := dingtalk.NewClient(
+		baseURLFromCredential(credential),
+		stringValue(credential["client_id"]),
+		stringValue(credential["client_secret"]),
+		firstString(credential["robot_code"], credential["client_id"]),
+	)
+	client.HTTPClient = req.Runtime.HTTPClient
+
+	now := time.Now().UTC()
+	token, expiresAt, err := client.TokenWithExpiry(ctx, now)
+	if err != nil {
+		return credentialValidationFailure(credential, state, err), nil
+	}
+
+	robotCode := firstString(credential["robot_code"], credential["client_id"])
+	if strings.TrimSpace(robotCode) != "" {
+		credential["robot_code"] = robotCode
+	}
+	accountKey := firstString(credential["account_id"], robotCode, credential["client_id"])
+	state["access_token"] = token
+	state["access_token_expires_at"] = expiresAt
+
+	return &sdk.CredentialValidationResult{
+		Valid:       true,
+		AccountKey:  accountKey,
+		DisplayName: firstString(credential["display_name"], robotCode, credential["client_id"]),
+		Credential:  credential,
+		State:       state,
+		Metadata: map[string]any{
+			"platform":   Platform,
+			"robot_code": robotCode,
+		},
+	}, nil
+}
+
 func (Connector) StartLogin(context.Context, sdk.LoginStartRequest) (*sdk.LoginChallenge, error) {
 	return nil, ErrCredentialLogin
 }
@@ -1036,6 +1074,30 @@ func firstValue(values ...any) any {
 		}
 	}
 	return nil
+}
+
+func cloneMap(value map[string]any) map[string]any {
+	out := make(map[string]any, len(value))
+	for key, item := range value {
+		out[key] = item
+	}
+	return out
+}
+
+func credentialValidationFailure(credential, state map[string]any, err error) *sdk.CredentialValidationResult {
+	message := ""
+	if err != nil {
+		message = err.Error()
+	}
+	return &sdk.CredentialValidationResult{
+		Valid:       false,
+		AccountKey:  firstString(credential["account_id"], credential["robot_code"], credential["client_id"]),
+		DisplayName: firstString(credential["display_name"], credential["robot_code"], credential["client_id"]),
+		Credential:  credential,
+		State:       state,
+		Metadata:    map[string]any{"platform": Platform},
+		Error:       message,
+	}
 }
 
 var _ sdk.Connector = Connector{}

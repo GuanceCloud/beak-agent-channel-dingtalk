@@ -19,6 +19,7 @@ const (
 type Connector interface {
 	Metadata() ConnectorMetadata
 	CredentialSchema(ctx context.Context) CredentialSchema
+	ValidateCredential(ctx context.Context, req CredentialValidationRequest) (*CredentialValidationResult, error)
 	StartLogin(ctx context.Context, req LoginStartRequest) (*LoginChallenge, error)
 	PollLogin(ctx context.Context, req LoginPollRequest) (*LoginStatus, error)
 	Start(ctx context.Context, runtime Runtime) error
@@ -62,6 +63,25 @@ type CredentialField struct {
 	Title       string `json:"title,omitempty"`
 	Description string `json:"description,omitempty"`
 	Secret      bool   `json:"secret,omitempty"`
+}
+
+type CredentialValidationRequest struct {
+	WorkspaceUUID string         `json:"workspace_uuid,omitempty"`
+	ChannelUUID   string         `json:"channel_uuid,omitempty"`
+	Platform      string         `json:"platform,omitempty"`
+	Credential    map[string]any `json:"credential,omitempty"`
+	State         map[string]any `json:"state,omitempty"`
+	Runtime       Runtime        `json:"-"`
+}
+
+type CredentialValidationResult struct {
+	Valid       bool           `json:"valid"`
+	AccountKey  string         `json:"account_key,omitempty"`
+	DisplayName string         `json:"display_name,omitempty"`
+	Credential  map[string]any `json:"credential,omitempty"`
+	State       map[string]any `json:"state,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+	Error       string         `json:"error,omitempty"`
 }
 
 type Runtime struct {
