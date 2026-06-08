@@ -15,6 +15,8 @@ v1 supports:
 - Beak-host-owned credential and connector state persistence.
 - Beak-host-owned DingTalk Stream connection, with robot event bodies passed into the SDK.
 - Inbound text, markdown, and simple richText messages into Beak sessions.
+- Mention normalization where `isInAtList` maps to `mentioned_me` and `isAtAll` maps only to `mention_all`.
+- Explicit bot mentions with empty text are still delivered to Beak for follow-up handling.
 - Outbound Beak agent text replies through DingTalk `sessionWebhook` when available, with Open API fallback when no valid `sessionWebhook` is stored.
 - Access token caching in host-owned account state for Open API fallback.
 - DingTalk Stream ACK frame helper for Beak-host-owned Stream runtimes.
@@ -96,6 +98,8 @@ type WebhookRequestConnector interface {
 
 Beak host must encrypt credential JSON before storing it. The SDK never writes credential or state to local files.
 
+`ValidateCredential(ctx, req)` exchanges `client_id` / `client_secret` for a DingTalk access token and returns normalized credential/state. It also writes standard `bot_identity` / `bot_identities` entries from `robot_code` when available. Later Stream events can add `chatbot_user_id` to the same standard identity state for self-echo filtering.
+
 ## Runtime Boundary
 
 Beak host injects `sdk.Runtime`:
@@ -146,6 +150,8 @@ if result.Ignored {
 - Text, markdown, and simple richText extraction.
 - Dedupe by `msgId` or Stream delivery message id.
 - DingTalk-domain `sessionWebhook`, `sessionWebhook` expiry, `isInAtList` metadata capture, and standard `mentioned_me` mapping.
+- `isAtAll` is reported as `mention_all` only; it does not imply `mentioned_me`.
+- Empty text is ignored only when the event did not explicitly mention the current bot.
 - Self-echo filtering when `chatbot_user_id` is available.
 - `sdk.Gateway.EnsureChatSession` for session creation or reuse.
 - `sdk.Gateway.CreateMessage` for Beak message writes.
@@ -277,6 +283,10 @@ Beak host stores account state. The SDK reads and writes through `sdk.AccountSto
 - `stream_cursors`: reserved Beak stream cursors.
 - `access_token` / `access_token_expires_at`: access token cache for Open API fallback.
 - `chatbot_user_id` / `chatbot_corp_id`: bot identity observed from DingTalk events.
+- `robot_code`: bot robot code used for ownership checks and Open API send.
+- `bot_identity` / `bot_identities`: standard bot identity cache used by the unified SDK contract.
+
+`peer_sessions` is chat-scoped. Do not include message id, delivery id, or future thread/topic ids in this cache key.
 
 ## Beak Host Integration
 

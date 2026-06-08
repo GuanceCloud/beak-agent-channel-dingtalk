@@ -32,6 +32,9 @@ func TestDingTalkConnectorMetadataAndSchema(t *testing.T) {
 	if !metadata.Capabilities.Text || !metadata.Capabilities.DirectChat || !metadata.Capabilities.GroupChat || metadata.Capabilities.Media {
 		t.Fatalf("capabilities=%+v", metadata.Capabilities)
 	}
+	if !metadata.Capabilities.Stream || metadata.Capabilities.Webhook {
+		t.Fatalf("stream/webhook capabilities=%+v", metadata.Capabilities)
+	}
 	if len(metadata.Capabilities.LoginModes) != 1 || metadata.Capabilities.LoginModes[0] != sdk.LoginModeCredential {
 		t.Fatalf("login modes=%+v", metadata.Capabilities.LoginModes)
 	}
@@ -93,6 +96,10 @@ func TestDingTalkConnectorValidateCredentialFetchesAccessToken(t *testing.T) {
 	}
 	if result.Credential["robot_code"] != "robot_validate" || result.State["access_token"] != "access-token-1" {
 		t.Fatalf("credential=%+v state=%+v", result.Credential, result.State)
+	}
+	identity, ok := result.State["bot_identity"].(map[string]any)
+	if !ok || identity["id"] != "robot_validate" || identity["id_type"] != "robot_code" {
+		t.Fatalf("bot_identity=%+v state=%+v", result.State["bot_identity"], result.State)
 	}
 	if result.Metadata["robot_code"] != "robot_validate" {
 		t.Fatalf("metadata=%+v", result.Metadata)
@@ -203,6 +210,9 @@ func TestDingTalkConnectorEventCreatesMessageAndDedupes(t *testing.T) {
 	if !result.Inbound.MentionedMe || !result.Inbound.MentionAll || len(result.Inbound.Mentions) != 6 {
 		t.Fatalf("inbound mentions=%+v mentioned_me=%v mention_all=%v", result.Inbound.Mentions, result.Inbound.MentionedMe, result.Inbound.MentionAll)
 	}
+	if result.Inbound.SenderDisplayName != "Alice" {
+		t.Fatalf("sender_display_name=%q", result.Inbound.SenderDisplayName)
+	}
 	gateway.mu.Lock()
 	if len(gateway.chatSessions) != 1 {
 		t.Fatalf("chatSessions=%+v", gateway.chatSessions)
@@ -225,6 +235,10 @@ func TestDingTalkConnectorEventCreatesMessageAndDedupes(t *testing.T) {
 	state := store.state("account-1")
 	if state["chatbot_user_id"] != "bot-1" || state["chatbot_corp_id"] != "corp-1" {
 		t.Fatalf("stored state=%+v", state)
+	}
+	identities, ok := state["bot_identities"].([]map[string]any)
+	if !ok || len(identities) != 2 || identities[0]["id"] != "bot-1" || identities[0]["id_type"] != "chatbot_user_id" || identities[1]["id"] != "robot-1" || identities[1]["id_type"] != "robot_code" {
+		t.Fatalf("bot_identities=%+v state=%+v", state["bot_identities"], state)
 	}
 	if state["session_webhooks"] == nil {
 		t.Fatalf("missing session_webhooks state=%+v", state)
@@ -273,6 +287,114 @@ func TestDingTalkConnectorEventIgnoresUntrustedSessionWebhook(t *testing.T) {
 	webhooks, _ := state["session_webhooks"].(map[string]beakstate.Webhook)
 	if len(webhooks) != 0 {
 		t.Fatalf("untrusted webhook should not be stored: %+v", webhooks)
+	}
+}
+
+func TestDingTalkConnectorMentionAllDoesNotMentionBot(t *testing.T) {
+	connector := newTestEventConnector(t)
+	gateway := &fakeSDKGateway{}
+	account := sdkAccount("account-1", "client-1", "secret-1", "")
+	result, err := connector.HandleEvent(context.Background(), sdk.Runtime{
+		WorkspaceUUID: "workspace-1",
+		Channel:       sdk.Channel{UUID: "channel-1", WorkspaceUUID: "workspace-1", Platform: Platform},
+		Account:       account,
+		Gateway:       gateway,
+		AccountStore:  newFakeSDKAccountStore(),
+	}, account, []byte(`{
+		"conversationType":"2",
+		"conversationId":"cid-group",
+		"senderStaffId":"staff-1",
+		"senderNick":"Alice",
+		"msgId":"msg-at-all",
+		"msgtype":"text",
+		"isInAtList":false,
+		"text":{"content":"hello all","at":{"isAtAll":true}},
+		"robotCode":"robot-1"
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Inbound == nil || !result.Inbound.MentionAll || result.Inbound.MentionedMe {
+		t.Fatalf("inbound=%+v", result.Inbound)
+	}
+}
+
+func TestDingTalkConnectorOnlyBotMentionWithEmptyTextIsDelivered(t *testing.T) {
+	connector := newTestEventConnector(t)
+	gateway := &fakeSDKGateway{}
+	account := sdkAccount("account-1", "client-1", "secret-1", "")
+	result, err := connector.HandleEvent(context.Background(), sdk.Runtime{
+		WorkspaceUUID: "workspace-1",
+		Channel:       sdk.Channel{UUID: "channel-1", WorkspaceUUID: "workspace-1", Platform: Platform},
+		Account:       account,
+		Gateway:       gateway,
+		AccountStore:  newFakeSDKAccountStore(),
+	}, account, []byte(`{
+		"conversationType":"2",
+		"conversationId":"cid-group",
+		"senderStaffId":"staff-1",
+		"senderNick":"Alice",
+		"msgId":"msg-only-bot",
+		"msgtype":"text",
+		"isInAtList":true,
+		"text":{"content":"","at":{}},
+		"chatbotUserId":"bot-1",
+		"robotCode":"robot-1"
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Ignored || result.Inbound == nil || !result.Inbound.MentionedMe || strings.TrimSpace(result.Inbound.Text) != "" {
+		t.Fatalf("result=%+v", result)
+	}
+	gateway.mu.Lock()
+	defer gateway.mu.Unlock()
+	if len(gateway.messages) != 1 || strings.TrimSpace(gateway.messages[0].Content) != "" {
+		t.Fatalf("messages=%+v", gateway.messages)
+	}
+}
+
+func TestDingTalkConnectorSelfEchoUsesStoredStandardBotIdentity(t *testing.T) {
+	connector := newTestEventConnector(t)
+	gateway := &fakeSDKGateway{}
+	store := newFakeSDKAccountStore()
+	account := sdkAccount("account-1", "client-1", "secret-1", "")
+	delete(account.State, "chatbot_user_id")
+	if err := store.SaveChannelAccountState(context.Background(), "account-1", map[string]any{
+		"bot_identity": map[string]any{
+			"id":      "bot-stored",
+			"id_type": "chatbot_user_id",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := connector.HandleEvent(context.Background(), sdk.Runtime{
+		WorkspaceUUID: "workspace-1",
+		Channel:       sdk.Channel{UUID: "channel-1", WorkspaceUUID: "workspace-1", Platform: Platform},
+		Account:       account,
+		Gateway:       gateway,
+		AccountStore:  store,
+	}, account, []byte(`{
+		"conversationType":"2",
+		"conversationId":"cid-group",
+		"senderId":"bot-stored",
+		"senderNick":"Beak Bot",
+		"msgId":"msg-self-stored",
+		"msgtype":"text",
+		"isInAtList":true,
+		"text":{"content":"self echo","at":{}},
+		"robotCode":"robot-1"
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || !result.Ignored || result.Reason != "self_echo" {
+		t.Fatalf("result=%+v", result)
+	}
+	gateway.mu.Lock()
+	defer gateway.mu.Unlock()
+	if len(gateway.messages) != 0 {
+		t.Fatalf("messages=%+v", gateway.messages)
 	}
 }
 

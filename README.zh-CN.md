@@ -15,6 +15,8 @@ v1 支持：
 - 由 Beak host 保存 credential 和 connector state。
 - 由 Beak host 建立 DingTalk Stream 长连接，并把收到的 robot event body 传给 SDK。
 - 文本、markdown、简单 richText 入站到 Beak session。
+- mention 标准化中 `isInAtList` 映射为 `mentioned_me`，`isAtAll` 只映射为 `mention_all`。
+- 只有明确 @bot 但正文为空的消息，仍会进入 Beak，用于 follow-up。
 - Beak agent 文本输出优先通过钉钉 `sessionWebhook` 回发；没有可用 `sessionWebhook` 时 fallback 到 robot Open API。
 - Open API fallback 的 access token 会缓存在 host-owned account state 中。
 - 提供 DingTalk Stream ACK frame helper，供 Beak-host-owned Stream runtime 使用。
@@ -96,6 +98,8 @@ type WebhookRequestConnector interface {
 
 Beak host 必须在入库前加密 credential JSON。SDK 不把 credential 或 state 写入本地文件。
 
+`ValidateCredential(ctx, req)` 会用 `client_id` / `client_secret` 换取钉钉 access token，并返回归一化 credential/state。`robot_code` 可用时会写入标准 `bot_identity` / `bot_identities`；后续 Stream event 里的 `chatbot_user_id` 也会补进标准 bot identity state，用于 self-echo 过滤。
+
 ## Runtime 边界
 
 Beak host 注入 `sdk.Runtime`：
@@ -146,6 +150,8 @@ if result.Ignored {
 - text、markdown、简单 richText 文本提取。
 - 按 `msgId` 或 Stream delivery message id 去重。
 - 捕获钉钉域名下的 `sessionWebhook`、`sessionWebhook` 过期时间和 `isInAtList` 元数据，并标准化映射 `mentioned_me`。
+- `isAtAll` 只会上报为 `mention_all`，不等价于 `mentioned_me`。
+- 只有事件没有明确提及当前 bot 时，空正文才会被忽略。
 - 配置 `chatbot_user_id` 时过滤 self echo。
 - 通过 `sdk.Gateway.EnsureChatSession` 创建或复用 session。
 - 通过 `sdk.Gateway.CreateMessage` 写入 Beak message。
@@ -277,6 +283,10 @@ Beak host 保存 account state，SDK 通过 `sdk.AccountStore` 读取并回写�
 - `stream_cursors`：预留给 Beak stream cursor。
 - `access_token` / `access_token_expires_at`：Open API fallback 使用的 access token 缓存。
 - `chatbot_user_id` / `chatbot_corp_id`：从钉钉事件中观察到的 bot identity。
+- `robot_code`：用于 account ownership 校验和 Open API 发送的机器人 code。
+- `bot_identity` / `bot_identities`：统一 SDK 契约里的标准 bot 身份缓存。
+
+`peer_sessions` 是 chat 维度缓存，不要把 message id、delivery id 或未来可能出现的 thread/topic id 拼进这个 key。
 
 ## Beak Host 集成步骤
 

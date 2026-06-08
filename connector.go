@@ -64,6 +64,8 @@ func (c Connector) Metadata() sdk.ConnectorMetadata {
 			Media:          caps.Media,
 			GroupChat:      caps.GroupChat,
 			DirectChat:     caps.DirectChat,
+			Stream:         true,
+			Webhook:        false,
 			BlockStreaming: caps.BlockStreaming,
 		},
 	}
@@ -110,6 +112,11 @@ func (Connector) ValidateCredential(ctx context.Context, req sdk.CredentialValid
 	robotCode := firstString(credential["robot_code"], credential["client_id"])
 	if strings.TrimSpace(robotCode) != "" {
 		credential["robot_code"] = robotCode
+		state["robot_code"] = robotCode
+		if identities := dingtalkBotIdentityState(beakstate.AccountState{RobotCode: robotCode}); len(identities) > 0 {
+			state["bot_identities"] = identities
+			state["bot_identity"] = identities[0]
+		}
 	}
 	accountKey := firstString(credential["account_id"], robotCode, credential["client_id"])
 	state["access_token"] = token
@@ -323,23 +330,27 @@ func (c Connector) processStreamEvent(ctx context.Context, runtime sdk.Runtime, 
 	if accountUUID == "" {
 		return nil, fmt.Errorf("dingtalk account_uuid or client_id is required")
 	}
-	senderID := event.Sender()
-	botUserID := firstString(account.Credential["chatbot_user_id"], account.State["chatbot_user_id"], event.ChatbotUserID)
-	if botUserID != "" && senderID == botUserID {
-		return &EventResult{Type: "message", Ignored: true, Reason: "self_echo"}, nil
-	}
-	text := event.Text()
-	chat := event.ChatIdentity()
-	if chat.ChatType == "" || chat.ChatID == "" || chat.SenderID == "" || text == "" {
-		return &EventResult{Type: "message", Ignored: true, Reason: "incomplete_or_non_text_message"}, nil
-	}
-
 	store := newConnectorStateStore(runtime.AccountStore)
 	store.seed(account)
 	state, err := store.LoadAccount(ctx, accountUUID)
 	if err != nil {
 		return nil, err
 	}
+	senderID := event.Sender()
+	botUserID := firstString(state.ChatbotUserID, account.State["chatbot_user_id"], standardBotIdentityValue(account.State, "chatbot_user_id"), account.Credential["chatbot_user_id"], event.ChatbotUserID)
+	if botUserID != "" && (senderID == botUserID || event.SenderID == botUserID || event.SenderStaffID == botUserID) {
+		return &EventResult{Type: "message", Ignored: true, Reason: "self_echo"}, nil
+	}
+	text := event.Text()
+	chat := event.ChatIdentity()
+	inbound := BuildInboundMessage(runtime.WorkspaceUUID, runtime.Channel.UUID, accountUUID, event, text)
+	if chat.ChatType == "" || chat.ChatID == "" || chat.SenderID == "" {
+		return &EventResult{Type: "message", Ignored: true, Reason: "incomplete_or_non_text_message"}, nil
+	}
+	if strings.TrimSpace(text) == "" && !inbound.MentionedMe {
+		return &EventResult{Type: "message", Ignored: true, Reason: "incomplete_or_non_text_message"}, nil
+	}
+
 	key := event.DedupeKey(accountUUID)
 	if _, ok := state.InboundSeen[key]; ok {
 		return &EventResult{Type: "message", Ignored: true, Reason: "duplicate", SessionUUID: state.PeerSessions[chat.StateKey()]}, nil
@@ -362,7 +373,6 @@ func (c Connector) processStreamEvent(ctx context.Context, runtime sdk.Runtime, 
 	if err != nil {
 		return nil, err
 	}
-	inbound := BuildInboundMessage(runtime.WorkspaceUUID, runtime.Channel.UUID, accountUUID, event, text)
 	messageUUID, err := runtime.Gateway.CreateMessage(ctx, sdk.CreateMessageRequest{
 		WorkspaceUUID: runtime.WorkspaceUUID,
 		SessionUUID:   sessionUUID,
@@ -399,6 +409,9 @@ func (c Connector) processStreamEvent(ctx context.Context, runtime sdk.Runtime, 
 	}
 	if event.ChatbotCorpID != "" {
 		state.ChatbotCorpID = event.ChatbotCorpID
+	}
+	if event.RobotCode != "" {
+		state.RobotCode = event.RobotCode
 	}
 	if dingtalk.IsAllowedSessionWebhookURL(event.SessionWebhook) {
 		state.SessionWebhooks[chat.StateKey()] = beakstate.Webhook{
@@ -454,19 +467,20 @@ func BuildInboundMessage(workspaceUUID, channelUUID, accountUUID string, event *
 	chat := event.ChatIdentity()
 	mentions := dingtalkMentionIdentities(event)
 	return sdk.InboundMessage{
-		WorkspaceUUID: workspaceUUID,
-		Platform:      Platform,
-		AccountUUID:   accountUUID,
-		ChannelUUID:   channelUUID,
-		ChatType:      chat.ChatType,
-		ChatID:        chat.ChatID,
-		SenderID:      chat.SenderID,
-		MessageID:     event.MsgID,
-		Text:          text,
-		DedupeKey:     event.DedupeKey(accountUUID),
-		Mentions:      mentions,
-		MentionedMe:   event.IsInAtList || event.IsAtAll,
-		MentionAll:    event.IsAtAll,
+		WorkspaceUUID:     workspaceUUID,
+		Platform:          Platform,
+		AccountUUID:       accountUUID,
+		ChannelUUID:       channelUUID,
+		ChatType:          chat.ChatType,
+		ChatID:            chat.ChatID,
+		SenderID:          chat.SenderID,
+		SenderDisplayName: event.SenderNick,
+		MessageID:         event.MsgID,
+		Text:              text,
+		DedupeKey:         event.DedupeKey(accountUUID),
+		Mentions:          mentions,
+		MentionedMe:       event.IsInAtList,
+		MentionAll:        event.IsAtAll,
 		Raw: map[string]any{
 			"conversation_type":          event.ConversationType,
 			"conversation_id":            event.ConversationID,
@@ -864,11 +878,11 @@ func sdkAccountToState(account sdk.ChannelAccount) beakstate.AccountState {
 	out := beakstate.AccountState{
 		AccountID:          accountKey(account),
 		ClientID:           stringValue(account.Credential["client_id"]),
-		RobotCode:          firstString(account.Credential["robot_code"], account.Credential["client_id"]),
+		RobotCode:          firstString(account.Credential["robot_code"], account.State["robot_code"], standardBotIdentityValue(account.State, "robot_code"), account.Credential["client_id"]),
 		BaseURL:            baseURLFromCredential(account.Credential),
 		AccessToken:        stringValue(account.State["access_token"]),
 		AccessTokenExpires: timeValue(account.State["access_token_expires_at"]),
-		ChatbotUserID:      firstString(account.Credential["chatbot_user_id"], account.State["chatbot_user_id"]),
+		ChatbotUserID:      firstString(account.State["chatbot_user_id"], standardBotIdentityValue(account.State, "chatbot_user_id"), account.Credential["chatbot_user_id"]),
 		ChatbotCorpID:      firstString(account.Credential["chatbot_corp_id"], account.State["chatbot_corp_id"]),
 		ChannelLinkSession: stringValue(account.State["channel_link_session"]),
 		PeerSessions:       stringMap(account.State["peer_sessions"]),
@@ -900,9 +914,95 @@ func accountStateToSDK(account beakstate.AccountState, existing sdk.ChannelAccou
 		"access_token_expires_at": account.AccessTokenExpires,
 		"chatbot_user_id":         account.ChatbotUserID,
 		"chatbot_corp_id":         account.ChatbotCorpID,
+		"robot_code":              account.RobotCode,
 		"updated_at":              account.UpdatedAt,
 	}
+	if identities := dingtalkBotIdentityState(account); len(identities) > 0 {
+		existing.State["bot_identities"] = identities
+		existing.State["bot_identity"] = identities[0]
+	}
 	return existing
+}
+
+func dingtalkBotIdentityState(account beakstate.AccountState) []map[string]any {
+	var identities []map[string]any
+	add := func(id, idType string) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return
+		}
+		identities = append(identities, map[string]any{
+			"id":      id,
+			"id_type": idType,
+		})
+	}
+	add(account.ChatbotUserID, "chatbot_user_id")
+	add(account.RobotCode, "robot_code")
+	return identities
+}
+
+func standardBotIdentityValue(state map[string]any, idTypes ...string) string {
+	wanted := make(map[string]struct{}, len(idTypes))
+	for _, idType := range idTypes {
+		idType = strings.TrimSpace(idType)
+		if idType != "" {
+			wanted[idType] = struct{}{}
+		}
+	}
+	for _, identity := range standardBotIdentityMaps(state) {
+		idType := strings.TrimSpace(stringValue(identity["id_type"]))
+		if len(wanted) > 0 {
+			if _, ok := wanted[idType]; !ok {
+				continue
+			}
+		}
+		if id := strings.TrimSpace(stringValue(identity["id"])); id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
+func standardBotIdentityMaps(state map[string]any) []map[string]any {
+	if len(state) == 0 {
+		return nil
+	}
+	var out []map[string]any
+	out = append(out, botIdentityMapsFromAny(state["bot_identities"])...)
+	out = append(out, botIdentityMapsFromAny(state["bot_identity"])...)
+	return out
+}
+
+func botIdentityMapsFromAny(value any) []map[string]any {
+	switch typed := value.(type) {
+	case nil:
+		return nil
+	case map[string]any:
+		return []map[string]any{typed}
+	case []map[string]any:
+		return typed
+	case []any:
+		out := make([]map[string]any, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, botIdentityMapsFromAny(item)...)
+		}
+		return out
+	case json.RawMessage:
+		var list []map[string]any
+		if err := json.Unmarshal(typed, &list); err == nil {
+			return list
+		}
+		var item map[string]any
+		if err := json.Unmarshal(typed, &item); err == nil {
+			return []map[string]any{item}
+		}
+	case string:
+		if strings.TrimSpace(typed) == "" {
+			return nil
+		}
+		return botIdentityMapsFromAny(json.RawMessage(typed))
+	}
+	return nil
 }
 
 func webhookMap(value any) map[string]beakstate.Webhook {
