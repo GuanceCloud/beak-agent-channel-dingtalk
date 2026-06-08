@@ -47,6 +47,8 @@ type Capabilities struct {
 	Media          bool     `json:"media"`
 	GroupChat      bool     `json:"group_chat"`
 	DirectChat     bool     `json:"direct_chat"`
+	Stream         bool     `json:"stream"`
+	Webhook        bool     `json:"webhook"`
 	BlockStreaming bool     `json:"block_streaming"`
 }
 
@@ -166,20 +168,22 @@ type LoginStatus struct {
 }
 
 type InboundMessage struct {
-	WorkspaceUUID string            `json:"workspace_uuid"`
-	Platform      string            `json:"platform"`
-	AccountUUID   string            `json:"account_uuid"`
-	ChannelUUID   string            `json:"channel_uuid"`
-	ChatType      string            `json:"chat_type"`
-	ChatID        string            `json:"chat_id"`
-	SenderID      string            `json:"sender_id"`
-	MessageID     string            `json:"message_id,omitempty"`
-	Text          string            `json:"text"`
-	DedupeKey     string            `json:"dedupe_key,omitempty"`
-	Mentions      []MentionIdentity `json:"mentions,omitempty"`
-	MentionedMe   bool              `json:"mentioned_me,omitempty"`
-	MentionAll    bool              `json:"mention_all,omitempty"`
-	Raw           map[string]any    `json:"raw,omitempty"`
+	WorkspaceUUID     string            `json:"workspace_uuid"`
+	Platform          string            `json:"platform"`
+	AccountUUID       string            `json:"account_uuid"`
+	ChannelUUID       string            `json:"channel_uuid"`
+	ChatType          string            `json:"chat_type"`
+	ChatID            string            `json:"chat_id"`
+	ThreadID          string            `json:"thread_id,omitempty"`
+	SenderID          string            `json:"sender_id"`
+	SenderDisplayName string            `json:"sender_display_name,omitempty"`
+	MessageID         string            `json:"message_id,omitempty"`
+	Text              string            `json:"text"`
+	DedupeKey         string            `json:"dedupe_key,omitempty"`
+	Mentions          []MentionIdentity `json:"mentions,omitempty"`
+	MentionedMe       bool              `json:"mentioned_me,omitempty"`
+	MentionAll        bool              `json:"mention_all,omitempty"`
+	Raw               map[string]any    `json:"raw,omitempty"`
 }
 
 type MentionIdentity struct {
@@ -238,6 +242,7 @@ type EnsureChatSessionRequest struct {
 	AccountUUID         string
 	ChatType            string
 	ChatID              string
+	ThreadID            string
 	SenderID            string
 	AgentParticipantID  string
 	BridgeParticipantID string
