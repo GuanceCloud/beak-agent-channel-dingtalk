@@ -119,6 +119,9 @@ func (Connector) ValidateCredential(ctx context.Context, req sdk.CredentialValid
 		}
 	}
 	accountKey := firstString(credential["account_id"], robotCode, credential["client_id"])
+	if accountKey != "" {
+		credential["account_id"] = accountKey
+	}
 	state["access_token"] = token
 	state["access_token_expires_at"] = expiresAt
 
