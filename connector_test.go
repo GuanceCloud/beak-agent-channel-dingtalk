@@ -236,6 +236,12 @@ func TestDingTalkConnectorEventCreatesMessageAndDedupes(t *testing.T) {
 	if gateway.messages[0].DedupeKey != "account-1:message:msg-1" {
 		t.Fatalf("dedupe key=%q", gateway.messages[0].DedupeKey)
 	}
+	if gateway.messages[0].Metadata["chat_display_name"] != "Team" || gateway.messages[0].Metadata["sender_display_name"] != "Alice" {
+		t.Fatalf("message metadata=%+v", gateway.messages[0].Metadata)
+	}
+	if identity, ok := gateway.messages[0].Metadata["chat_identity"].(sdk.ChatIdentity); !ok || identity.ID != "cid-group" || identity.DisplayName != "Team" {
+		t.Fatalf("message chat_identity=%+v metadata=%+v", identity, gateway.messages[0].Metadata)
+	}
 	gateway.mu.Unlock()
 
 	state := store.state("account-1")
