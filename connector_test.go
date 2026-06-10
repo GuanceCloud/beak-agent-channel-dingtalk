@@ -213,6 +213,9 @@ func TestDingTalkConnectorEventCreatesMessageAndDedupes(t *testing.T) {
 	if result.Inbound.SenderDisplayName != "Alice" {
 		t.Fatalf("sender_display_name=%q", result.Inbound.SenderDisplayName)
 	}
+	if result.Inbound.ChatDisplayName != "Team" || result.Inbound.ChatIdentity.DisplayName != "Team" {
+		t.Fatalf("chat identity=%+v display_name=%q", result.Inbound.ChatIdentity, result.Inbound.ChatDisplayName)
+	}
 	gateway.mu.Lock()
 	if len(gateway.chatSessions) != 1 {
 		t.Fatalf("chatSessions=%+v", gateway.chatSessions)
@@ -220,6 +223,9 @@ func TestDingTalkConnectorEventCreatesMessageAndDedupes(t *testing.T) {
 	chatReq := gateway.chatSessions[0]
 	if chatReq.AccountUUID != "account-1" || chatReq.ChatType != sdk.ChatTypeGroup || chatReq.ChatID != "cid-group" || chatReq.SenderID != "staff-1" {
 		t.Fatalf("chatReq=%+v", chatReq)
+	}
+	if chatReq.ChatDisplayName != "Team" || chatReq.ChatIdentity.DisplayName != "Team" || chatReq.ChatIdentity.ID != "cid-group" {
+		t.Fatalf("chatReq identity=%+v display_name=%q", chatReq.ChatIdentity, chatReq.ChatDisplayName)
 	}
 	if len(gateway.messages) != 1 {
 		t.Fatalf("messages=%+v", gateway.messages)

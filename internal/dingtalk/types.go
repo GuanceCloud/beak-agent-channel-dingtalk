@@ -97,9 +97,10 @@ type StreamEvent struct {
 }
 
 type ChatIdentity struct {
-	ChatType string
-	ChatID   string
-	SenderID string
+	ChatType    string
+	ChatID      string
+	SenderID    string
+	DisplayName string
 }
 
 func ParseStreamEvent(data []byte) (*StreamEvent, error) {
@@ -188,15 +189,15 @@ func (e StreamEvent) ChatIdentity() ChatIdentity {
 		if chatID == "" {
 			chatID = strings.TrimSpace(e.ConversationID)
 		}
-		return ChatIdentity{ChatType: ChatTypeDirect, ChatID: chatID, SenderID: senderID}
+		return ChatIdentity{ChatType: ChatTypeDirect, ChatID: chatID, SenderID: senderID, DisplayName: strings.TrimSpace(e.SenderNick)}
 	case ConversationTypeGroup:
 		chatID := strings.TrimSpace(e.ConversationID)
 		if chatID == "" {
 			chatID = senderID
 		}
-		return ChatIdentity{ChatType: ChatTypeGroup, ChatID: chatID, SenderID: senderID}
+		return ChatIdentity{ChatType: ChatTypeGroup, ChatID: chatID, SenderID: senderID, DisplayName: strings.TrimSpace(e.ConversationTitle)}
 	default:
-		return ChatIdentity{ChatID: strings.TrimSpace(e.ConversationID), SenderID: senderID}
+		return ChatIdentity{ChatID: strings.TrimSpace(e.ConversationID), SenderID: senderID, DisplayName: strings.TrimSpace(e.ConversationTitle)}
 	}
 }
 

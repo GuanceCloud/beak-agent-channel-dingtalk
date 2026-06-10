@@ -175,6 +175,9 @@ type InboundMessage struct {
 	ChatType          string            `json:"chat_type"`
 	ChatID            string            `json:"chat_id"`
 	ThreadID          string            `json:"thread_id,omitempty"`
+	ChatDisplayName   string            `json:"chat_display_name,omitempty"`
+	ChatAvatarURL     string            `json:"chat_avatar_url,omitempty"`
+	ChatIdentity      ChatIdentity      `json:"chat_identity,omitempty"`
 	SenderID          string            `json:"sender_id"`
 	SenderDisplayName string            `json:"sender_display_name,omitempty"`
 	MessageID         string            `json:"message_id,omitempty"`
@@ -190,6 +193,14 @@ type MentionIdentity struct {
 	ID          string `json:"id"`
 	IDType      string `json:"id_type,omitempty"`
 	DisplayName string `json:"display_name,omitempty"`
+}
+
+type ChatIdentity struct {
+	ID          string `json:"id,omitempty"`
+	IDType      string `json:"id_type,omitempty"`
+	Type        string `json:"type,omitempty"`
+	DisplayName string `json:"display_name,omitempty"`
+	AvatarURL   string `json:"avatar_url,omitempty"`
 }
 
 type OutboundMessage struct {
@@ -243,6 +254,9 @@ type EnsureChatSessionRequest struct {
 	ChatType            string
 	ChatID              string
 	ThreadID            string
+	ChatDisplayName     string
+	ChatAvatarURL       string
+	ChatIdentity        ChatIdentity
 	SenderID            string
 	AgentParticipantID  string
 	BridgeParticipantID string
