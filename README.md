@@ -16,6 +16,7 @@ v1 supports:
 - Beak-host-owned DingTalk Stream connection, with robot event bodies passed into the SDK.
 - Inbound text, markdown, and simple richText messages into Beak sessions.
 - Mention normalization where `isInAtList` maps to `mentioned_me` and `isAtAll` maps only to `mention_all`.
+- Chat identity normalization where DingTalk `conversationId` becomes `chat_identity.id` and `conversationTitle` becomes the group `chat_display_name`.
 - Explicit bot mentions with empty text are still delivered to Beak for follow-up handling.
 - Outbound Beak agent text replies through DingTalk `sessionWebhook` when available, with Open API fallback when no valid `sessionWebhook` is stored.
 - Access token caching in host-owned account state for Open API fallback.

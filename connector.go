@@ -365,12 +365,16 @@ func (c Connector) processStreamEvent(ctx context.Context, runtime sdk.Runtime, 
 		AccountUUID:         accountUUID,
 		ChatType:            chat.ChatType,
 		ChatID:              chat.ChatID,
+		ChatDisplayName:     chat.DisplayName,
+		ChatIdentity:        dingtalkSDKChatIdentity(chat),
 		SenderID:            chat.SenderID,
 		AgentParticipantID:  runtime.Gateway.AgentParticipantID(),
 		BridgeParticipantID: runtime.Gateway.BridgeParticipantID(Platform),
 		Metadata: map[string]any{
-			"source":       Platform,
-			"account_uuid": accountUUID,
+			"source":            Platform,
+			"account_uuid":      accountUUID,
+			"chat_display_name": chat.DisplayName,
+			"chat_identity":     dingtalkSDKChatIdentity(chat),
 		},
 	})
 	if err != nil {
@@ -476,6 +480,8 @@ func BuildInboundMessage(workspaceUUID, channelUUID, accountUUID string, event *
 		ChannelUUID:       channelUUID,
 		ChatType:          chat.ChatType,
 		ChatID:            chat.ChatID,
+		ChatDisplayName:   chat.DisplayName,
+		ChatIdentity:      dingtalkSDKChatIdentity(chat),
 		SenderID:          chat.SenderID,
 		SenderDisplayName: event.SenderNick,
 		MessageID:         event.MsgID,
@@ -488,6 +494,8 @@ func BuildInboundMessage(workspaceUUID, channelUUID, accountUUID string, event *
 			"conversation_type":          event.ConversationType,
 			"conversation_id":            event.ConversationID,
 			"conversation_title":         event.ConversationTitle,
+			"chat_display_name":          chat.DisplayName,
+			"chat_identity":              dingtalkSDKChatIdentity(chat),
 			"sender_id":                  chat.SenderID,
 			"sender_name":                event.SenderNick,
 			"message_id":                 event.MsgID,
@@ -505,6 +513,15 @@ func BuildInboundMessage(workspaceUUID, channelUUID, accountUUID string, event *
 			"chatbot_user_id":            event.ChatbotUserID,
 			"chatbot_corp_id":            event.ChatbotCorpID,
 		},
+	}
+}
+
+func dingtalkSDKChatIdentity(chat dingtalk.ChatIdentity) sdk.ChatIdentity {
+	return sdk.ChatIdentity{
+		ID:          strings.TrimSpace(chat.ChatID),
+		IDType:      "conversation_id",
+		Type:        strings.TrimSpace(chat.ChatType),
+		DisplayName: strings.TrimSpace(chat.DisplayName),
 	}
 }
 

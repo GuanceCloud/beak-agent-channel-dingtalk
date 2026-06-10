@@ -16,6 +16,7 @@ v1 支持：
 - 由 Beak host 建立 DingTalk Stream 长连接，并把收到的 robot event body 传给 SDK。
 - 文本、markdown、简单 richText 入站到 Beak session。
 - mention 标准化中 `isInAtList` 映射为 `mentioned_me`，`isAtAll` 只映射为 `mention_all`。
+- chat identity 标准化中，钉钉 `conversationId` 会进入 `chat_identity.id`，`conversationTitle` 会作为群聊 `chat_display_name`。
 - 只有明确 @bot 但正文为空的消息，仍会进入 Beak，用于 follow-up。
 - Beak agent 文本输出优先通过钉钉 `sessionWebhook` 回发；没有可用 `sessionWebhook` 时 fallback 到 robot Open API。
 - Open API fallback 的 access token 会缓存在 host-owned account state 中。
