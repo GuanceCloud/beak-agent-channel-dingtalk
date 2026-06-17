@@ -222,6 +222,43 @@ func TestClientSendMarkdown(t *testing.T) {
 	}
 }
 
+func TestClientSendMarkdownUsesEmptyDefaultTitle(t *testing.T) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/v1.0/robot/groupMessages/send" {
+			t.Fatalf("unexpected request: %s", r.URL.Path)
+		}
+		var body struct {
+			MsgParam string `json:"msgParam"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		var param map[string]string
+		if err := json.Unmarshal([]byte(body.MsgParam), &param); err != nil {
+			t.Fatal(err)
+		}
+		if param["title"] != "" || param["text"] != "# 这个明显就是用 正文内容截断之后作为标题" {
+			t.Fatalf("param=%+v", param)
+		}
+		return jsonResponse(map[string]any{"processQueryKey": "pqk-markdown-default-title"})
+	})}
+	client := NewClient("https://api.dingtalk.test", "client-1", "secret-1", "robot-1")
+	client.HTTPClient = httpClient
+	client.AccessToken = "token-1"
+	client.AccessTokenExpiresAt = time.Now().Add(time.Hour)
+	resp, err := client.SendMarkdown(context.Background(), SendMarkdownRequest{
+		ChatType: ChatTypeGroup,
+		ChatID:   "cid-group",
+		Text:     "# 这个明显就是用 正文内容截断之后作为标题",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.ProcessQueryKey != "pqk-markdown-default-title" {
+		t.Fatalf("resp=%+v", resp)
+	}
+}
+
 func TestClientSendWebhookTextRejectsUntrustedURL(t *testing.T) {
 	client := NewClient("https://api.dingtalk.test", "client-1", "secret-1", "robot-1")
 	if _, err := client.SendWebhookText(context.Background(), "https://example.test/robot/sendBySession?session=s1", "reply"); err == nil || !strings.Contains(err.Error(), "not allowed") {

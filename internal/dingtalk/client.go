@@ -221,7 +221,7 @@ func (c *Client) SendWebhookMarkdownMessage(ctx context.Context, sessionWebhook 
 	body := map[string]any{
 		"msgtype": "markdown",
 		"markdown": map[string]string{
-			"title": markdownTitle(req.Title, req.Text),
+			"title": markdownTitle(req.Title),
 			"text":  markdownWithAtSuffix(req.Text, req.At),
 		},
 	}
@@ -244,34 +244,16 @@ func textMsgParam(text string, at AtOptions) map[string]any {
 
 func markdownMsgParam(title string, text string, at AtOptions) map[string]any {
 	return map[string]any{
-		"title": markdownTitle(title, text),
+		"title": markdownTitle(title),
 		"text":  markdownWithAtSuffix(text, at),
 	}
 }
 
-func markdownTitle(title string, text string) string {
+func markdownTitle(title string) string {
 	if title = strings.TrimSpace(title); title != "" {
 		return title
 	}
-	return titleFromMarkdown(text)
-}
-
-func titleFromMarkdown(text string) string {
-	for _, line := range strings.Split(strings.TrimSpace(text), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		line = strings.TrimSpace(strings.TrimLeft(line, "#*>- \t"))
-		if line == "" {
-			continue
-		}
-		if len([]rune(line)) > 20 {
-			return string([]rune(line)[:20])
-		}
-		return line
-	}
-	return "Message"
+	return ""
 }
 
 func textWithAtSuffix(text string, at AtOptions) string {

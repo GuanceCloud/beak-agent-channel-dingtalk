@@ -620,25 +620,7 @@ func dingtalkOutboundTitle(req sdk.OutboundMessage) string {
 	if title := strings.TrimSpace(firstString(req.Title, req.Raw["title"])); title != "" {
 		return title
 	}
-	return titleFromMarkdown(req.Text)
-}
-
-func titleFromMarkdown(text string) string {
-	for _, line := range strings.Split(strings.TrimSpace(text), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		line = strings.TrimSpace(strings.TrimLeft(line, "#*>- \t"))
-		if line == "" {
-			continue
-		}
-		if len([]rune(line)) > 20 {
-			return string([]rune(line)[:20])
-		}
-		return line
-	}
-	return "Message"
+	return ""
 }
 
 func dingtalkEventOwnershipValid(account sdk.ChannelAccount, event *dingtalk.StreamEvent) bool {

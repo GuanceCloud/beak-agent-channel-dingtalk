@@ -173,6 +173,8 @@ _, err := connector.Send(ctx, runtime, sdk.OutboundMessage{
 })
 ```
 
+When `Title` is omitted for markdown output, DingTalk delivery sends an empty title; the SDK never derives a title by truncating the message body.
+
 If the latest inbound event stored a valid DingTalk-domain `sessionWebhook` for this chat, `connector.Send` replies through that `sessionWebhook`; markdown uses webhook `msgtype=markdown`. Otherwise the SDK gets and caches an access token and sends markdown with `msgKey=sampleMarkdown`:
 
 ```text

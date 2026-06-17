@@ -618,6 +618,53 @@ func TestDingTalkConnectorSendMarkdownOpenAPI(t *testing.T) {
 	}
 }
 
+func TestDingTalkConnectorSendMarkdownUsesEmptyDefaultTitle(t *testing.T) {
+	httpClient := &http.Client{Transport: testRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Path {
+		case "/v1.0/oauth2/accessToken":
+			return testJSONResponse(map[string]any{"accessToken": "token-1", "expireIn": 7200})
+		case "/v1.0/robot/groupMessages/send":
+			var body struct {
+				MsgKey   string `json:"msgKey"`
+				MsgParam string `json:"msgParam"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body.MsgKey != "sampleMarkdown" {
+				t.Fatalf("body=%+v", body)
+			}
+			var param map[string]string
+			if err := json.Unmarshal([]byte(body.MsgParam), &param); err != nil {
+				t.Fatal(err)
+			}
+			if param["title"] != "" || param["text"] != "# 这个明显就是用 正文内容截断之后作为标题\n- 错误日志" {
+				t.Fatalf("param=%+v", param)
+			}
+			return testJSONResponse(map[string]any{"processQueryKey": "pqk-markdown-default-title"})
+		default:
+			t.Fatalf("unexpected request: %s", r.URL.Path)
+		}
+		return nil, nil
+	})}
+	result, err := NewConnector().Send(context.Background(), sdk.Runtime{
+		HTTPClient: httpClient,
+		Account:    sdkAccount("account-1", "client-1", "secret-1", "https://api.dingtalk.test"),
+	}, sdk.OutboundMessage{
+		AccountUUID: "account-1",
+		ChatType:    sdk.ChatTypeGroup,
+		ChatID:      "cid-group",
+		Text:        "# 这个明显就是用 正文内容截断之后作为标题\n- 错误日志",
+		Format:      "markdown",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.MessageID != "pqk-markdown-default-title" || result.Raw["delivery_method"] != "openapi" || result.Raw["msg_type"] != "markdown" {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
 func TestDingTalkOutboundMarkdownFormatAliases(t *testing.T) {
 	req := sdk.OutboundMessage{Raw: map[string]any{"content_type": "text/markdown"}}
 	if got := dingtalkOutboundFormat(req); got != "markdown" {
