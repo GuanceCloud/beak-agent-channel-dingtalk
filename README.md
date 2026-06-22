@@ -19,6 +19,7 @@ v1 supports:
 - Chat identity normalization where DingTalk `conversationId` becomes `chat_identity.id` and `conversationTitle` becomes the group `chat_display_name`.
 - Explicit bot mentions with empty text are still delivered to Beak for follow-up handling.
 - Outbound Beak agent text replies through DingTalk `sessionWebhook` when available, with Open API fallback when no valid `sessionWebhook` is stored.
+- Common `Acknowledge` surface for Beak host compatibility; current DingTalk SDK returns `unsupported` because no safe user-visible lightweight ACK mode is exposed.
 - Access token caching in host-owned account state for Open API fallback.
 - DingTalk Stream ACK frame helper for Beak-host-owned Stream runtimes.
 - Direct and group chat normalization.
@@ -232,6 +233,28 @@ x-acs-dingtalk-access-token: <access_token>
 
 To force Open API delivery even when a valid `sessionWebhook` exists, set `Raw["force_openapi"]=true` on the outbound message.
 
+## Lightweight Acknowledgement
+
+The connector exposes the same `Acknowledge` method as the other SDKs so Beak host can call a common adapter method:
+
+```go
+result, err := connector.Acknowledge(ctx, runtime, sdk.OutboundAck{
+	AccountUUID: accountUUID,
+	ChatType:    sdk.ChatTypeGroup,
+	ChatID:      "open-conversation-id",
+	Intent:      "processing",
+	Action:      "start",
+})
+```
+
+Current result:
+
+```text
+Status="unsupported"
+```
+
+DingTalk Stream ACK only confirms event delivery to DingTalk. It is not a user-visible processing hint in the chat, so the SDK does not expose it as an `AckModes` value and does not send a normal text fallback.
+
 ## Session Rules
 
 Gateway session identity must include the connected bot account and IM platform chat identity.
@@ -299,8 +322,10 @@ Beak host stores account state. The SDK reads and writes through `sdk.AccountSto
 4. Establish DingTalk Stream using account credentials.
 5. Locate the matching `channel_account` when a robot event arrives, then call `HandleEvent(ctx, runtime, account, eventBody)`.
 6. The SDK normalizes `chat_type`, `chat_id`, `sender_id`, and `text`, then calls Gateway to create or reuse a Beak session.
-7. Beak host writes the user message and triggers the agent.
-8. Beak host consumes agent stream text and calls `Send(ctx, runtime, outbound)`.
+7. Beak host writes the user message.
+8. Beak host may call `Acknowledge(ctx, runtime, ack)` for the common processing hint path; DingTalk currently returns `unsupported`.
+9. Beak host triggers the agent.
+10. Beak host consumes agent stream text and calls `Send(ctx, runtime, outbound)`.
 
 ## Verification
 

@@ -24,6 +24,7 @@ type Connector interface {
 	PollLogin(ctx context.Context, req LoginPollRequest) (*LoginStatus, error)
 	Start(ctx context.Context, runtime Runtime) error
 	Send(ctx context.Context, runtime Runtime, req OutboundMessage) (*SendResult, error)
+	Acknowledge(ctx context.Context, runtime Runtime, req OutboundAck) (*AckResult, error)
 	Stop(ctx context.Context, account ChannelAccount) error
 }
 
@@ -50,6 +51,7 @@ type Capabilities struct {
 	Stream         bool     `json:"stream"`
 	Webhook        bool     `json:"webhook"`
 	BlockStreaming bool     `json:"block_streaming"`
+	AckModes       []string `json:"ack_modes,omitempty"`
 }
 
 type CredentialSchema struct {
@@ -229,6 +231,32 @@ type SendResult struct {
 	Platform    string         `json:"platform"`
 	AccountUUID string         `json:"account_uuid"`
 	MessageID   string         `json:"message_id,omitempty"`
+	Raw         map[string]any `json:"raw,omitempty"`
+}
+
+type OutboundAck struct {
+	WorkspaceUUID     string         `json:"workspace_uuid"`
+	Platform          string         `json:"platform"`
+	AccountUUID       string         `json:"account_uuid"`
+	ChannelUUID       string         `json:"channel_uuid"`
+	SessionUUID       string         `json:"session_uuid"`
+	SourceMessageUUID string         `json:"source_message_uuid,omitempty"`
+	ChatType          string         `json:"chat_type"`
+	ChatID            string         `json:"chat_id"`
+	TargetMessageID   string         `json:"target_message_id,omitempty"`
+	Intent            string         `json:"intent,omitempty"`
+	Action            string         `json:"action,omitempty"`
+	Mode              string         `json:"mode,omitempty"`
+	Emoji             string         `json:"emoji,omitempty"`
+	Raw               map[string]any `json:"raw,omitempty"`
+}
+
+type AckResult struct {
+	Platform    string         `json:"platform"`
+	AccountUUID string         `json:"account_uuid"`
+	Mode        string         `json:"mode,omitempty"`
+	Status      string         `json:"status"`
+	ReactionID  string         `json:"reaction_id,omitempty"`
 	Raw         map[string]any `json:"raw,omitempty"`
 }
 

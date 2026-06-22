@@ -35,6 +35,9 @@ func TestDingTalkConnectorMetadataAndSchema(t *testing.T) {
 	if !metadata.Capabilities.Stream || metadata.Capabilities.Webhook {
 		t.Fatalf("stream/webhook capabilities=%+v", metadata.Capabilities)
 	}
+	if len(metadata.Capabilities.AckModes) != 0 {
+		t.Fatalf("ack modes=%+v", metadata.Capabilities.AckModes)
+	}
 	if len(metadata.Capabilities.LoginModes) != 1 || metadata.Capabilities.LoginModes[0] != sdk.LoginModeCredential {
 		t.Fatalf("login modes=%+v", metadata.Capabilities.LoginModes)
 	}
@@ -54,6 +57,32 @@ func TestDingTalkConnectorMetadataAndSchema(t *testing.T) {
 	}
 	if _, ok := schema.Properties["base_url"]; ok {
 		t.Fatalf("base_url must not be exposed in credential schema")
+	}
+}
+
+func TestDingTalkConnectorAcknowledgeUnsupported(t *testing.T) {
+	result, err := NewConnector().Acknowledge(context.Background(), sdk.Runtime{
+		Account: sdk.ChannelAccount{
+			UUID:     "account-1",
+			Platform: "dingtalk",
+			Credential: map[string]any{
+				"client_id":     "client-1",
+				"client_secret": "secret-1",
+				"robot_code":    "robot-1",
+			},
+		},
+	}, sdk.OutboundAck{
+		AccountUUID:     "account-1",
+		ChatType:        sdk.ChatTypeGroup,
+		ChatID:          "cid-1",
+		TargetMessageID: "msg-1",
+		Action:          "start",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "unsupported" || result.Mode != "unsupported" || result.AccountUUID != "account-1" {
+		t.Fatalf("result=%+v", result)
 	}
 }
 

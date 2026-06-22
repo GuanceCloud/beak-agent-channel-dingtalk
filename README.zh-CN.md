@@ -19,6 +19,7 @@ v1 支持：
 - chat identity 标准化中，钉钉 `conversationId` 会进入 `chat_identity.id`，`conversationTitle` 会作为群聊 `chat_display_name`。
 - 只有明确 @bot 但正文为空的消息，仍会进入 Beak，用于 follow-up。
 - Beak agent 文本输出优先通过钉钉 `sessionWebhook` 回发；没有可用 `sessionWebhook` 时 fallback 到 robot Open API。
+- 暴露统一 `Acknowledge` 方法，方便 Beak host 统一调用；当前钉钉 SDK 返回 `unsupported`，因为没有安全的用户可见轻量确认方式。
 - Open API fallback 的 access token 会缓存在 host-owned account state 中。
 - 提供 DingTalk Stream ACK frame helper，供 Beak-host-owned Stream runtime 使用。
 - 单聊和群聊标准化。
@@ -232,6 +233,28 @@ x-acs-dingtalk-access-token: <access_token>
 
 如果需要强制走 Open API，即使当前 chat 有可用 `sessionWebhook`，可以在 outbound message 设置 `Raw["force_openapi"]=true`。
 
+## 轻量确认 Acknowledge
+
+Connector 暴露和其他 SDK 一样的 `Acknowledge` 方法，Beak host 可以统一调用 adapter：
+
+```go
+result, err := connector.Acknowledge(ctx, runtime, sdk.OutboundAck{
+	AccountUUID: accountUUID,
+	ChatType:    sdk.ChatTypeGroup,
+	ChatID:      "open-conversation-id",
+	Intent:      "processing",
+	Action:      "start",
+})
+```
+
+当前返回：
+
+```text
+Status="unsupported"
+```
+
+DingTalk Stream ACK 只是告诉钉钉事件已经被接收，不是群里用户可见的“处理中”提示，所以 SDK 不把它声明成 `AckModes`，也不会发送普通文本 fallback。
+
 ## Session 规则
 
 Gateway session identity 必须包含已连接 bot account 和 IM 平台 chat identity。
@@ -299,8 +322,10 @@ Beak host 保存 account state，SDK 通过 `sdk.AccountStore` 读取并回写�
 4. Beak host 用 account credential 建立 DingTalk Stream 连接。
 5. 收到 robot event 后，定位对应 `channel_account`，调用 `HandleEvent(ctx, runtime, account, eventBody)`。
 6. SDK 标准化出 `chat_type`、`chat_id`、`sender_id`、`text`，并调用 Gateway 创建或复用 Beak session。
-7. Beak host 写入 user message 后触发 agent。
-8. Beak host 从 agent stream 取到文本回复后调用 `Send(ctx, runtime, outbound)`。
+7. Beak host 写入 user message。
+8. Beak host 可以按统一处理提示路径调用 `Acknowledge(ctx, runtime, ack)`；钉钉当前返回 `unsupported`。
+9. Beak host 触发 agent。
+10. Beak host 从 agent stream 取到文本回复后调用 `Send(ctx, runtime, outbound)`。
 
 ## 验证
 

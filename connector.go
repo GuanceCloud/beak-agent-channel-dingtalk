@@ -67,6 +67,7 @@ func (c Connector) Metadata() sdk.ConnectorMetadata {
 			Stream:         true,
 			Webhook:        false,
 			BlockStreaming: caps.BlockStreaming,
+			AckModes:       nil,
 		},
 	}
 }
@@ -289,6 +290,22 @@ func (c Connector) Send(ctx context.Context, runtime sdk.Runtime, req sdk.Outbou
 			"chat_id":           req.ChatID,
 			"msg_type":          format,
 			"response":          resp.Raw,
+		},
+	}, nil
+}
+
+func (c Connector) Acknowledge(ctx context.Context, runtime sdk.Runtime, req sdk.OutboundAck) (*sdk.AckResult, error) {
+	account, err := selectRuntimeAccount(runtime, req.AccountUUID)
+	if err != nil {
+		return nil, err
+	}
+	return &sdk.AckResult{
+		Platform:    Platform,
+		AccountUUID: accountKey(account),
+		Mode:        "unsupported",
+		Status:      "unsupported",
+		Raw: map[string]any{
+			"reason": "dingtalk_visible_ack_unsupported",
 		},
 	}, nil
 }
