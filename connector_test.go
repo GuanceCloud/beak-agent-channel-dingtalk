@@ -600,6 +600,53 @@ func TestDingTalkConnectorSendMarkdownUsesSessionWebhook(t *testing.T) {
 	}
 }
 
+func TestDingTalkConnectorSendMarkdownSessionWebhookDerivesTitleFromContent(t *testing.T) {
+	httpClient := &http.Client{Transport: testRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.String() != "https://oapi.dingtalk.com/robot/sendBySession?session=s1" {
+			t.Fatalf("unexpected request: %s", r.URL.String())
+		}
+		var body struct {
+			MsgType  string `json:"msgtype"`
+			Markdown struct {
+				Title string `json:"title"`
+				Text  string `json:"text"`
+			} `json:"markdown"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.MsgType != "markdown" || body.Markdown.Title != "第一行标题" || body.Markdown.Text != "# 第一行标题\n第二行内容" {
+			t.Fatalf("body=%+v", body)
+		}
+		return testJSONResponse(map[string]any{"errcode": 0, "errmsg": "ok"})
+	})}
+	account := sdkAccount("account-1", "client-1", "secret-1", "https://api.dingtalk.test")
+	account.State = map[string]any{
+		"session_webhooks": map[string]any{
+			"group:cid-group": map[string]any{
+				"url":        "https://oapi.dingtalk.com/robot/sendBySession?session=s1",
+				"expires_at": time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano),
+			},
+		},
+	}
+	result, err := NewConnector().Send(context.Background(), sdk.Runtime{
+		HTTPClient: httpClient,
+		Account:    account,
+	}, sdk.OutboundMessage{
+		AccountUUID: "account-1",
+		ChatType:    sdk.ChatTypeGroup,
+		ChatID:      "cid-group",
+		Text:        "# 第一行标题\n第二行内容",
+		Format:      "markdown",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Raw["delivery_method"] != "session_webhook" || result.Raw["msg_type"] != "markdown" {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
 func TestDingTalkConnectorSendMarkdownOpenAPI(t *testing.T) {
 	httpClient := &http.Client{Transport: testRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		switch r.URL.Path {
@@ -647,7 +694,7 @@ func TestDingTalkConnectorSendMarkdownOpenAPI(t *testing.T) {
 	}
 }
 
-func TestDingTalkConnectorSendMarkdownUsesSafeDefaultTitle(t *testing.T) {
+func TestDingTalkConnectorSendMarkdownDerivesTitleFromContent(t *testing.T) {
 	httpClient := &http.Client{Transport: testRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		switch r.URL.Path {
 		case "/v1.0/oauth2/accessToken":
@@ -667,7 +714,7 @@ func TestDingTalkConnectorSendMarkdownUsesSafeDefaultTitle(t *testing.T) {
 			if err := json.Unmarshal([]byte(body.MsgParam), &param); err != nil {
 				t.Fatal(err)
 			}
-			if param["title"] != "Beak" || param["text"] != "# 这个明显就是用 正文内容截断之后作为标题\n- 错误日志" {
+			if param["title"] != "这个明显就是用 正文内容截断之后作为标题" || param["text"] != "# 这个明显就是用 正文内容截断之后作为标题\n- 错误日志" {
 				t.Fatalf("param=%+v", param)
 			}
 			return testJSONResponse(map[string]any{"processQueryKey": "pqk-markdown-default-title"})

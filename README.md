@@ -174,7 +174,7 @@ _, err := connector.Send(ctx, runtime, sdk.OutboundMessage{
 })
 ```
 
-When `Title` is omitted for markdown output, the SDK uses the fixed default title `Beak` because DingTalk markdown payloads require a non-empty `title`. The SDK never derives a title by truncating the message body, and Beak host does not need a DingTalk-specific title branch.
+When `Title` is omitted for markdown output, the SDK derives DingTalk's required non-empty `title` from the first non-empty content line and truncates it to 20 runes. If the content is also empty, it falls back to `Beak`. Beak host still does not need a DingTalk-specific title branch.
 
 If the latest inbound event stored a valid DingTalk-domain `sessionWebhook` for this chat, `connector.Send` replies through that `sessionWebhook`; markdown uses webhook `msgtype=markdown`. Otherwise the SDK gets and caches an access token and sends markdown with `msgKey=sampleMarkdown`:
 

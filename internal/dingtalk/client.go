@@ -221,7 +221,7 @@ func (c *Client) SendWebhookMarkdownMessage(ctx context.Context, sessionWebhook 
 	body := map[string]any{
 		"msgtype": "markdown",
 		"markdown": map[string]string{
-			"title": markdownTitle(req.Title),
+			"title": markdownTitle(req.Title, req.Text),
 			"text":  markdownWithAtSuffix(req.Text, req.At),
 		},
 	}
@@ -244,16 +244,58 @@ func textMsgParam(text string, at AtOptions) map[string]any {
 
 func markdownMsgParam(title string, text string, at AtOptions) map[string]any {
 	return map[string]any{
-		"title": markdownTitle(title),
+		"title": markdownTitle(title, text),
 		"text":  markdownWithAtSuffix(text, at),
 	}
 }
 
-func markdownTitle(title string) string {
+func markdownTitle(title string, text string) string {
 	if title = strings.TrimSpace(title); title != "" {
 		return title
 	}
+	if title = markdownTitleFromText(text); title != "" {
+		return title
+	}
 	return "Beak"
+}
+
+func markdownTitleFromText(text string) string {
+	for _, line := range strings.Split(text, "\n") {
+		line = cleanMarkdownTitleLine(line)
+		if line == "" {
+			continue
+		}
+		return truncateRunes(line, 20)
+	}
+	return ""
+}
+
+func cleanMarkdownTitleLine(line string) string {
+	line = strings.TrimSpace(line)
+	for strings.HasPrefix(line, ">") {
+		line = strings.TrimSpace(strings.TrimPrefix(line, ">"))
+	}
+	for strings.HasPrefix(line, "#") {
+		line = strings.TrimSpace(strings.TrimPrefix(line, "#"))
+	}
+	for _, marker := range []string{"- ", "* ", "+ "} {
+		if strings.HasPrefix(line, marker) {
+			line = strings.TrimSpace(strings.TrimPrefix(line, marker))
+			break
+		}
+	}
+	return strings.Join(strings.Fields(line), " ")
+}
+
+func truncateRunes(text string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= max {
+		return text
+	}
+	return string(runes[:max])
 }
 
 func textWithAtSuffix(text string, at AtOptions) string {

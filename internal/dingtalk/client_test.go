@@ -222,7 +222,7 @@ func TestClientSendMarkdown(t *testing.T) {
 	}
 }
 
-func TestClientSendMarkdownUsesSafeDefaultTitle(t *testing.T) {
+func TestClientSendMarkdownDerivesTitleFromContent(t *testing.T) {
 	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Path != "/v1.0/robot/groupMessages/send" {
 			t.Fatalf("unexpected request: %s", r.URL.Path)
@@ -237,7 +237,7 @@ func TestClientSendMarkdownUsesSafeDefaultTitle(t *testing.T) {
 		if err := json.Unmarshal([]byte(body.MsgParam), &param); err != nil {
 			t.Fatal(err)
 		}
-		if param["title"] != "Beak" || param["text"] != "# 这个明显就是用 正文内容截断之后作为标题" {
+		if param["title"] != "这个明显就是用 正文内容截断之后作为标题" || param["text"] != "# 这个明显就是用 正文内容截断之后作为标题" {
 			t.Fatalf("param=%+v", param)
 		}
 		return jsonResponse(map[string]any{"processQueryKey": "pqk-markdown-default-title"})
