@@ -253,7 +253,7 @@ func markdownTitle(title string) string {
 	if title = strings.TrimSpace(title); title != "" {
 		return title
 	}
-	return ""
+	return "Beak"
 }
 
 func textWithAtSuffix(text string, at AtOptions) string {
