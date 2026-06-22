@@ -647,7 +647,7 @@ func TestDingTalkConnectorSendMarkdownOpenAPI(t *testing.T) {
 	}
 }
 
-func TestDingTalkConnectorSendMarkdownUsesEmptyDefaultTitle(t *testing.T) {
+func TestDingTalkConnectorSendMarkdownUsesSafeDefaultTitle(t *testing.T) {
 	httpClient := &http.Client{Transport: testRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		switch r.URL.Path {
 		case "/v1.0/oauth2/accessToken":
@@ -667,7 +667,7 @@ func TestDingTalkConnectorSendMarkdownUsesEmptyDefaultTitle(t *testing.T) {
 			if err := json.Unmarshal([]byte(body.MsgParam), &param); err != nil {
 				t.Fatal(err)
 			}
-			if param["title"] != "" || param["text"] != "# 这个明显就是用 正文内容截断之后作为标题\n- 错误日志" {
+			if param["title"] != "Beak" || param["text"] != "# 这个明显就是用 正文内容截断之后作为标题\n- 错误日志" {
 				t.Fatalf("param=%+v", param)
 			}
 			return testJSONResponse(map[string]any{"processQueryKey": "pqk-markdown-default-title"})

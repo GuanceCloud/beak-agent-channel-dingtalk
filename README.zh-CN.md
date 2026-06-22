@@ -174,7 +174,7 @@ _, err := connector.Send(ctx, runtime, sdk.OutboundMessage{
 })
 ```
 
-markdown 出站未传 `Title` 时，钉钉发送会使用空标题；SDK 不会从正文内容截断生成标题。
+markdown 出站未传 `Title` 时，SDK 会使用固定默认标题 `Beak`，因为钉钉 markdown payload 要求 `title` 非空。SDK 不会从正文内容截断生成标题，Beak host 也不需要按钉钉分支补标题。
 
 如果最近一次入站事件为该 chat 存过有效且通过域名校验的 `sessionWebhook`，`connector.Send` 会优先用该 `sessionWebhook` 回复；markdown 会使用 webhook `msgtype=markdown`。否则 SDK 会获取并缓存 access token，并用 `msgKey=sampleMarkdown` 发送 markdown：
 
