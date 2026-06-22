@@ -307,12 +307,15 @@ Beak host stores account state. The SDK reads and writes through `sdk.AccountSto
 - `inbound_seen`: inbound dedupe keys.
 - `sent_beak_messages`: reserved outbound message dedupe state.
 - `stream_cursors`: reserved Beak stream cursors.
+- `stream_last_event_at` / `stream_last_activity_at`: standard runtime health timestamps written when `HandleEvent` successfully processes an event.
 - `access_token` / `access_token_expires_at`: access token cache for Open API fallback.
 - `chatbot_user_id` / `chatbot_corp_id`: bot identity observed from DingTalk events.
 - `robot_code`: bot robot code used for ownership checks and Open API send.
 - `bot_identity` / `bot_identities`: standard bot identity cache used by the unified SDK contract.
 
 `peer_sessions` is chat-scoped. Do not include message id, delivery id, or future thread/topic ids in this cache key.
+
+DingTalk Stream connection ownership stays in Beak host. The SDK does not own the main Stream client, heartbeat, or reconnect loop; host stream runtime should write connection and reconnect health, while the SDK writes event activity timestamps.
 
 ## Beak Host Integration
 

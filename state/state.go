@@ -12,21 +12,34 @@ const (
 )
 
 type AccountState struct {
-	AccountID          string             `json:"account_id"`
-	ClientID           string             `json:"client_id,omitempty"`
-	RobotCode          string             `json:"robot_code,omitempty"`
-	BaseURL            string             `json:"base_url,omitempty"`
-	AccessToken        string             `json:"access_token,omitempty"`
-	AccessTokenExpires time.Time          `json:"access_token_expires_at,omitempty"`
-	ChatbotUserID      string             `json:"chatbot_user_id,omitempty"`
-	ChatbotCorpID      string             `json:"chatbot_corp_id,omitempty"`
-	ChannelLinkSession string             `json:"channel_link_session,omitempty"`
-	PeerSessions       map[string]string  `json:"peer_sessions,omitempty"`
-	SessionWebhooks    map[string]Webhook `json:"session_webhooks,omitempty"`
-	InboundSeen        map[string]string  `json:"inbound_seen,omitempty"`
-	SentBeakMessages   map[string]string  `json:"sent_beak_messages,omitempty"`
-	StreamCursors      map[string]string  `json:"stream_cursors,omitempty"`
-	UpdatedAt          time.Time          `json:"updated_at"`
+	AccountID                  string             `json:"account_id"`
+	ClientID                   string             `json:"client_id,omitempty"`
+	RobotCode                  string             `json:"robot_code,omitempty"`
+	BaseURL                    string             `json:"base_url,omitempty"`
+	AccessToken                string             `json:"access_token,omitempty"`
+	AccessTokenExpires         time.Time          `json:"access_token_expires_at,omitempty"`
+	ChatbotUserID              string             `json:"chatbot_user_id,omitempty"`
+	ChatbotCorpID              string             `json:"chatbot_corp_id,omitempty"`
+	ChannelLinkSession         string             `json:"channel_link_session,omitempty"`
+	PeerSessions               map[string]string  `json:"peer_sessions,omitempty"`
+	SessionWebhooks            map[string]Webhook `json:"session_webhooks,omitempty"`
+	InboundSeen                map[string]string  `json:"inbound_seen,omitempty"`
+	SentBeakMessages           map[string]string  `json:"sent_beak_messages,omitempty"`
+	StreamCursors              map[string]string  `json:"stream_cursors,omitempty"`
+	StreamConnectionState      string             `json:"stream_connection_state,omitempty"`
+	StreamConnectedAt          time.Time          `json:"stream_connected_at,omitempty"`
+	StreamDisconnectedAt       time.Time          `json:"stream_disconnected_at,omitempty"`
+	StreamLastActivityAt       time.Time          `json:"stream_last_activity_at,omitempty"`
+	StreamLastPingAt           time.Time          `json:"stream_last_ping_at,omitempty"`
+	StreamLastPongAt           time.Time          `json:"stream_last_pong_at,omitempty"`
+	StreamLastEventAt          time.Time          `json:"stream_last_event_at,omitempty"`
+	StreamLastError            string             `json:"stream_last_error,omitempty"`
+	StreamLastErrorAt          time.Time          `json:"stream_last_error_at,omitempty"`
+	StreamReconnectRequestedAt time.Time          `json:"stream_reconnect_requested_at,omitempty"`
+	StreamReconnectError       string             `json:"stream_reconnect_error,omitempty"`
+	StreamReconnectErrorAt     time.Time          `json:"stream_reconnect_error_at,omitempty"`
+	StreamSessionExpired       bool               `json:"stream_session_expired,omitempty"`
+	UpdatedAt                  time.Time          `json:"updated_at"`
 }
 
 type Webhook struct {

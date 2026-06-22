@@ -307,12 +307,15 @@ Beak host 保存 account state，SDK 通过 `sdk.AccountStore` 读取并回写�
 - `inbound_seen`：入站消息 dedupe key。
 - `sent_beak_messages`：预留给出站 message dedupe。
 - `stream_cursors`：预留给 Beak stream cursor。
+- `stream_last_event_at` / `stream_last_activity_at`：`HandleEvent` 成功处理事件时写入的标准 runtime health 时间。
 - `access_token` / `access_token_expires_at`：Open API fallback 使用的 access token 缓存。
 - `chatbot_user_id` / `chatbot_corp_id`：从钉钉事件中观察到的 bot identity。
 - `robot_code`：用于 account ownership 校验和 Open API 发送的机器人 code。
 - `bot_identity` / `bot_identities`：统一 SDK 契约里的标准 bot 身份缓存。
 
 `peer_sessions` 是 chat 维度缓存，不要把 message id、delivery id 或未来可能出现的 thread/topic id 拼进这个 key。
+
+钉钉 Stream 连接归属仍在 Beak host。SDK 不持有主 Stream client、heartbeat 或 reconnect loop；host stream runtime 负责写 connection/reconnect health，SDK 只写事件 activity 时间。
 
 ## Beak Host 集成步骤
 

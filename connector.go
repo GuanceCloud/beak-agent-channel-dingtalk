@@ -446,6 +446,9 @@ func (c Connector) processStreamEvent(ctx context.Context, runtime sdk.Runtime, 
 			ExpiresAt: timeFromUnixMilli(event.SessionWebhookExpiredTime),
 		}
 	}
+	now := time.Now().UTC()
+	state.StreamLastEventAt = now
+	state.StreamLastActivityAt = now
 	if err := store.SaveAccount(ctx, state); err != nil {
 		return nil, err
 	}
@@ -899,20 +902,33 @@ func (s *connectorStateStore) SaveAccount(ctx context.Context, account *beakstat
 
 func sdkAccountToState(account sdk.ChannelAccount) beakstate.AccountState {
 	out := beakstate.AccountState{
-		AccountID:          accountKey(account),
-		ClientID:           stringValue(account.Credential["client_id"]),
-		RobotCode:          firstString(account.Credential["robot_code"], account.State["robot_code"], standardBotIdentityValue(account.State, "robot_code"), account.Credential["client_id"]),
-		BaseURL:            baseURLFromCredential(account.Credential),
-		AccessToken:        stringValue(account.State["access_token"]),
-		AccessTokenExpires: timeValue(account.State["access_token_expires_at"]),
-		ChatbotUserID:      firstString(account.State["chatbot_user_id"], standardBotIdentityValue(account.State, "chatbot_user_id"), account.Credential["chatbot_user_id"]),
-		ChatbotCorpID:      firstString(account.Credential["chatbot_corp_id"], account.State["chatbot_corp_id"]),
-		ChannelLinkSession: stringValue(account.State["channel_link_session"]),
-		PeerSessions:       stringMap(account.State["peer_sessions"]),
-		SessionWebhooks:    webhookMap(account.State["session_webhooks"]),
-		InboundSeen:        stringMap(account.State["inbound_seen"]),
-		SentBeakMessages:   stringMap(account.State["sent_beak_messages"]),
-		StreamCursors:      stringMap(account.State["stream_cursors"]),
+		AccountID:                  accountKey(account),
+		ClientID:                   stringValue(account.Credential["client_id"]),
+		RobotCode:                  firstString(account.Credential["robot_code"], account.State["robot_code"], standardBotIdentityValue(account.State, "robot_code"), account.Credential["client_id"]),
+		BaseURL:                    baseURLFromCredential(account.Credential),
+		AccessToken:                stringValue(account.State["access_token"]),
+		AccessTokenExpires:         timeValue(account.State["access_token_expires_at"]),
+		ChatbotUserID:              firstString(account.State["chatbot_user_id"], standardBotIdentityValue(account.State, "chatbot_user_id"), account.Credential["chatbot_user_id"]),
+		ChatbotCorpID:              firstString(account.Credential["chatbot_corp_id"], account.State["chatbot_corp_id"]),
+		ChannelLinkSession:         stringValue(account.State["channel_link_session"]),
+		PeerSessions:               stringMap(account.State["peer_sessions"]),
+		SessionWebhooks:            webhookMap(account.State["session_webhooks"]),
+		InboundSeen:                stringMap(account.State["inbound_seen"]),
+		SentBeakMessages:           stringMap(account.State["sent_beak_messages"]),
+		StreamCursors:              stringMap(account.State["stream_cursors"]),
+		StreamConnectionState:      stringValue(account.State[sdk.RuntimeHealthKeyStreamConnectionState]),
+		StreamConnectedAt:          timeValue(account.State[sdk.RuntimeHealthKeyStreamConnectedAt]),
+		StreamDisconnectedAt:       timeValue(account.State[sdk.RuntimeHealthKeyStreamDisconnectedAt]),
+		StreamLastActivityAt:       timeValue(account.State[sdk.RuntimeHealthKeyStreamLastActivityAt]),
+		StreamLastPingAt:           timeValue(account.State[sdk.RuntimeHealthKeyStreamLastPingAt]),
+		StreamLastPongAt:           timeValue(account.State[sdk.RuntimeHealthKeyStreamLastPongAt]),
+		StreamLastEventAt:          timeValue(account.State[sdk.RuntimeHealthKeyStreamLastEventAt]),
+		StreamLastError:            stringValue(account.State[sdk.RuntimeHealthKeyStreamLastError]),
+		StreamLastErrorAt:          timeValue(account.State[sdk.RuntimeHealthKeyStreamLastErrorAt]),
+		StreamReconnectRequestedAt: timeValue(account.State[sdk.RuntimeHealthKeyStreamReconnectRequestedAt]),
+		StreamReconnectError:       stringValue(account.State[sdk.RuntimeHealthKeyStreamReconnectError]),
+		StreamReconnectErrorAt:     timeValue(account.State[sdk.RuntimeHealthKeyStreamReconnectErrorAt]),
+		StreamSessionExpired:       boolValue(account.State[sdk.RuntimeHealthKeyStreamSessionExpired]),
 	}
 	out.EnsureMaps()
 	return out
@@ -927,18 +943,31 @@ func accountStateToSDK(account beakstate.AccountState, existing sdk.ChannelAccou
 		existing.Credential = map[string]any{}
 	}
 	existing.State = map[string]any{
-		"channel_link_session":    account.ChannelLinkSession,
-		"peer_sessions":           account.PeerSessions,
-		"session_webhooks":        account.SessionWebhooks,
-		"inbound_seen":            account.InboundSeen,
-		"sent_beak_messages":      account.SentBeakMessages,
-		"stream_cursors":          account.StreamCursors,
-		"access_token":            account.AccessToken,
-		"access_token_expires_at": account.AccessTokenExpires,
-		"chatbot_user_id":         account.ChatbotUserID,
-		"chatbot_corp_id":         account.ChatbotCorpID,
-		"robot_code":              account.RobotCode,
-		"updated_at":              account.UpdatedAt,
+		"channel_link_session":                         account.ChannelLinkSession,
+		"peer_sessions":                                account.PeerSessions,
+		"session_webhooks":                             account.SessionWebhooks,
+		"inbound_seen":                                 account.InboundSeen,
+		"sent_beak_messages":                           account.SentBeakMessages,
+		"stream_cursors":                               account.StreamCursors,
+		"access_token":                                 account.AccessToken,
+		"access_token_expires_at":                      account.AccessTokenExpires,
+		"chatbot_user_id":                              account.ChatbotUserID,
+		"chatbot_corp_id":                              account.ChatbotCorpID,
+		"robot_code":                                   account.RobotCode,
+		sdk.RuntimeHealthKeyStreamConnectionState:      account.StreamConnectionState,
+		sdk.RuntimeHealthKeyStreamConnectedAt:          account.StreamConnectedAt,
+		sdk.RuntimeHealthKeyStreamDisconnectedAt:       account.StreamDisconnectedAt,
+		sdk.RuntimeHealthKeyStreamLastActivityAt:       account.StreamLastActivityAt,
+		sdk.RuntimeHealthKeyStreamLastPingAt:           account.StreamLastPingAt,
+		sdk.RuntimeHealthKeyStreamLastPongAt:           account.StreamLastPongAt,
+		sdk.RuntimeHealthKeyStreamLastEventAt:          account.StreamLastEventAt,
+		sdk.RuntimeHealthKeyStreamLastError:            account.StreamLastError,
+		sdk.RuntimeHealthKeyStreamLastErrorAt:          account.StreamLastErrorAt,
+		sdk.RuntimeHealthKeyStreamReconnectRequestedAt: account.StreamReconnectRequestedAt,
+		sdk.RuntimeHealthKeyStreamReconnectError:       account.StreamReconnectError,
+		sdk.RuntimeHealthKeyStreamReconnectErrorAt:     account.StreamReconnectErrorAt,
+		sdk.RuntimeHealthKeyStreamSessionExpired:       account.StreamSessionExpired,
+		"updated_at":                                   account.UpdatedAt,
 	}
 	if identities := dingtalkBotIdentityState(account); len(identities) > 0 {
 		existing.State["bot_identities"] = identities
