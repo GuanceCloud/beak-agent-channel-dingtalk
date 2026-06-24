@@ -21,7 +21,7 @@ v1 支持：
 - Beak agent 文本输出优先通过钉钉 `sessionWebhook` 回发；没有可用 `sessionWebhook` 时 fallback 到 robot Open API。
 - 暴露统一 `Acknowledge` 方法，方便 Beak host 统一调用；当前钉钉 SDK 返回 `unsupported`，因为没有安全的用户可见轻量确认方式。
 - Open API fallback 的 access token 会缓存在 host-owned account state 中。
-- 提供 DingTalk Stream ACK frame helper，供 Beak-host-owned Stream runtime 使用。
+- 提供 DingTalk Stream endpoint、ping、frame parse 和 ACK frame helper，供 Beak-host-owned Stream runtime 使用。
 - 单聊和群聊标准化。
 - 一个已连接 bot account 中的一个群聊对应一个 Beak session。
 - 一个已连接 bot account 中的一个单聊对应一个 Beak session。
@@ -66,7 +66,7 @@ func DingTalkConnector() sdk.Connector {
 }
 ```
 
-该 connector 同时实现 `beakdingtalk.EventConnector`：
+该 connector 实现通用 SDK `HostStreamConnector`，用于 host-owned stream 传输；`beakdingtalk.EventConnector` 仍保留给已解码 event payload 使用：
 
 ```go
 type EventConnector interface {
@@ -124,26 +124,28 @@ runtime := sdk.Runtime{
 
 ## DingTalk Stream 事件处理
 
-Beak host 负责用用户保存的 `client_id` / `client_secret` 建立 DingTalk Stream 连接。收到 robot event 后，把钉钉返回的 event data JSON 交给 SDK：
+Beak host 持有 WebSocket dial/read/write/reconnect loop，但 DingTalk endpoint、ping frame、frame parse、event handling 和 ACK response frame 都通过 SDK `HostStreamConnector` 获取：
 
 ```go
 connector := beakdingtalk.NewConnector()
 
-eventConnector, ok := any(connector).(beakdingtalk.EventConnector)
+hostStream, ok := any(connector).(sdk.HostStreamConnector)
 if !ok {
-	return errors.New("dingtalk connector does not handle events")
+	return errors.New("dingtalk connector does not expose HostStreamConnector")
 }
 
-result, err := eventConnector.HandleEvent(ctx, runtime, account, eventBody)
+connectResult, err := hostStream.ConnectStream(ctx, runtime, account)
 if err != nil {
 	return err
 }
-if result.Ignored {
-	return nil
-}
+frameResult, err := hostStream.HandleStreamFrame(ctx, runtime, account, sdk.StreamFrameRequest{
+	MessageType: sdk.StreamMessageTypeText,
+	Data:        frameBytes,
+	State:       connectResult.State,
+})
 ```
 
-`HandleEvent` 支持：
+`HandleStreamFrame` 内部复用 `HandleEvent`。事件处理支持：
 
 - 钉钉 Stream robot event data。
 - 钉钉 Stream envelope：`{"headers":{"messageId":"..."},"data":"{...}"}`。

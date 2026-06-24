@@ -21,6 +21,9 @@ func TestDingTalkConnectorMetadataAndSchema(t *testing.T) {
 	if _, ok := connector.(EventConnector); !ok {
 		t.Fatal("NewConnector should expose EventConnector for host-owned DingTalk Stream routing")
 	}
+	if _, ok := connector.(sdk.HostStreamConnector); !ok {
+		t.Fatal("NewConnector should expose HostStreamConnector for host-owned DingTalk Stream routing")
+	}
 	if _, ok := connector.(WebhookRequestConnector); !ok {
 		t.Fatal("NewConnector should expose WebhookRequestConnector for HTTP callback routing")
 	}
@@ -34,6 +37,9 @@ func TestDingTalkConnectorMetadataAndSchema(t *testing.T) {
 	}
 	if !metadata.Capabilities.Stream || metadata.Capabilities.Webhook {
 		t.Fatalf("stream/webhook capabilities=%+v", metadata.Capabilities)
+	}
+	if metadata.Capabilities.RuntimeOwnership != sdk.RuntimeOwnershipHostStream {
+		t.Fatalf("runtime ownership=%q, want %q", metadata.Capabilities.RuntimeOwnership, sdk.RuntimeOwnershipHostStream)
 	}
 	if len(metadata.Capabilities.AckModes) != 0 {
 		t.Fatalf("ack modes=%+v", metadata.Capabilities.AckModes)

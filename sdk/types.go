@@ -14,6 +14,13 @@ const (
 
 	LoginModeQRCode     = "qr_code"
 	LoginModeCredential = "credential"
+
+	RuntimeOwnershipHostStream = "host_stream"
+	RuntimeOwnershipSDKOwned   = "sdk_owned"
+
+	StreamMessageTypeText   = 1
+	StreamMessageTypeBinary = 2
+	StreamMessageTypePing   = 9
 )
 
 type Connector interface {
@@ -34,6 +41,60 @@ type WebhookResponse struct {
 	Body       []byte
 }
 
+// HostStreamConnector is implemented by SDKs whose platform stream connection is
+// owned by the Beak host while platform endpoint and frame semantics stay inside
+// the SDK. Implementations must not start their own long-running reconnect loop.
+type HostStreamConnector interface {
+	ConnectStream(ctx context.Context, runtime Runtime, account ChannelAccount) (*StreamConnectResult, error)
+	BuildStreamPing(ctx context.Context, req StreamPingRequest) (*StreamFrame, error)
+	HandleStreamFrame(ctx context.Context, runtime Runtime, account ChannelAccount, req StreamFrameRequest) (*StreamFrameResult, error)
+}
+
+type StreamConnectResult struct {
+	URL             string
+	Headers         map[string]string
+	ServiceID       string
+	ReadMessageType int
+	PingInterval    time.Duration
+	PongTimeout     time.Duration
+	State           any
+	HealthUpdates   map[string]any
+}
+
+type StreamPingRequest struct {
+	ServiceID string
+	State     any
+}
+
+type StreamFrameRequest struct {
+	MessageType int
+	Data        []byte
+	ServiceID   string
+	State       any
+}
+
+type StreamFrame struct {
+	MessageType int
+	Data        []byte
+}
+
+type StreamFrameResult struct {
+	ResponseFrames []StreamFrame
+	HealthUpdates  map[string]any
+	EventResult    *StreamEventResult
+	CloseReason    string
+	State          any
+}
+
+type StreamEventResult struct {
+	Type        string          `json:"type"`
+	Ignored     bool            `json:"ignored,omitempty"`
+	Reason      string          `json:"reason,omitempty"`
+	SessionUUID string          `json:"session_uuid,omitempty"`
+	MessageUUID string          `json:"message_uuid,omitempty"`
+	Inbound     *InboundMessage `json:"inbound,omitempty"`
+}
+
 type ConnectorMetadata struct {
 	ID           string       `json:"id"`
 	Platform     string       `json:"platform"`
@@ -43,15 +104,16 @@ type ConnectorMetadata struct {
 }
 
 type Capabilities struct {
-	LoginModes     []string `json:"login_modes"`
-	Text           bool     `json:"text"`
-	Media          bool     `json:"media"`
-	GroupChat      bool     `json:"group_chat"`
-	DirectChat     bool     `json:"direct_chat"`
-	Stream         bool     `json:"stream"`
-	Webhook        bool     `json:"webhook"`
-	BlockStreaming bool     `json:"block_streaming"`
-	AckModes       []string `json:"ack_modes,omitempty"`
+	LoginModes       []string `json:"login_modes"`
+	Text             bool     `json:"text"`
+	Media            bool     `json:"media"`
+	GroupChat        bool     `json:"group_chat"`
+	DirectChat       bool     `json:"direct_chat"`
+	Stream           bool     `json:"stream"`
+	Webhook          bool     `json:"webhook"`
+	BlockStreaming   bool     `json:"block_streaming"`
+	AckModes         []string `json:"ack_modes,omitempty"`
+	RuntimeOwnership string   `json:"runtime_ownership,omitempty"`
 }
 
 type CredentialSchema struct {

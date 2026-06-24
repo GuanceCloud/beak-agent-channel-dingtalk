@@ -13,7 +13,7 @@ v1 supports:
 - Exposing a common `sdk.Connector` through `beakdingtalk.NewConnector()`.
 - Credential-based DingTalk bot account onboarding.
 - Beak-host-owned credential and connector state persistence.
-- Beak-host-owned DingTalk Stream connection, with robot event bodies passed into the SDK.
+- Beak-host-owned DingTalk Stream connection through the SDK `HostStreamConnector`, with endpoint/frame protocol details kept inside this SDK.
 - Inbound text, markdown, and simple richText messages into Beak sessions.
 - Mention normalization where `isInAtList` maps to `mentioned_me` and `isAtAll` maps only to `mention_all`.
 - Chat identity normalization where DingTalk `conversationId` becomes `chat_identity.id` and `conversationTitle` becomes the group `chat_display_name`.
@@ -21,7 +21,7 @@ v1 supports:
 - Outbound Beak agent text replies through DingTalk `sessionWebhook` when available, with Open API fallback when no valid `sessionWebhook` is stored.
 - Common `Acknowledge` surface for Beak host compatibility; current DingTalk SDK returns `unsupported` because no safe user-visible lightweight ACK mode is exposed.
 - Access token caching in host-owned account state for Open API fallback.
-- DingTalk Stream ACK frame helper for Beak-host-owned Stream runtimes.
+- DingTalk Stream endpoint, ping, frame parse, and ACK frame helpers for Beak-host-owned Stream runtimes.
 - Direct and group chat normalization.
 - One Beak session per connected bot account plus group chat.
 - One Beak session per connected bot account plus direct chat.
@@ -66,7 +66,7 @@ func DingTalkConnector() sdk.Connector {
 }
 ```
 
-The connector also implements `beakdingtalk.EventConnector`:
+The connector implements the generic SDK `HostStreamConnector` for host-owned stream transport. `beakdingtalk.EventConnector` remains available for already-decoded event payloads:
 
 ```go
 type EventConnector interface {
@@ -124,26 +124,28 @@ runtime := sdk.Runtime{
 
 ## DingTalk Stream Events
 
-Beak host establishes the DingTalk Stream connection using the saved `client_id` and `client_secret`. When a robot event arrives, pass the event data JSON to the SDK:
+Beak host owns the WebSocket dial/read/write/reconnect loop, but obtains DingTalk endpoint, ping frame, frame parsing, event handling, and ACK response frames through the SDK `HostStreamConnector`:
 
 ```go
 connector := beakdingtalk.NewConnector()
 
-eventConnector, ok := any(connector).(beakdingtalk.EventConnector)
+hostStream, ok := any(connector).(sdk.HostStreamConnector)
 if !ok {
-	return errors.New("dingtalk connector does not handle events")
+	return errors.New("dingtalk connector does not expose HostStreamConnector")
 }
 
-result, err := eventConnector.HandleEvent(ctx, runtime, account, eventBody)
+connectResult, err := hostStream.ConnectStream(ctx, runtime, account)
 if err != nil {
 	return err
 }
-if result.Ignored {
-	return nil
-}
+frameResult, err := hostStream.HandleStreamFrame(ctx, runtime, account, sdk.StreamFrameRequest{
+	MessageType: sdk.StreamMessageTypeText,
+	Data:        frameBytes,
+	State:       connectResult.State,
+})
 ```
 
-`HandleEvent` supports:
+`HandleStreamFrame` reuses `HandleEvent` internally. Event handling supports:
 
 - DingTalk Stream robot event data.
 - DingTalk Stream envelopes: `{"headers":{"messageId":"..."},"data":"{...}"}`.
