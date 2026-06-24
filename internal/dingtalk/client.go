@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	neturl "net/url"
 	"strings"
@@ -426,7 +428,11 @@ func (c *Client) doJSONURL(ctx context.Context, method, targetURL string, body a
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		if urlErr, ok := err.(*neturl.Error); ok {
+		if isTimeoutError(err) {
+			return fmt.Errorf("%s %s timed out while waiting for DingTalk API response", method, sanitizeURLForError(targetURL))
+		}
+		var urlErr *neturl.Error
+		if errors.As(err, &urlErr) {
 			return fmt.Errorf("%s %s failed: %v", method, sanitizeURLForError(targetURL), urlErr.Err)
 		}
 		return fmt.Errorf("%s %s failed: %w", method, sanitizeURLForError(targetURL), err)
@@ -452,6 +458,17 @@ func (c *Client) doJSONURL(ctx context.Context, method, targetURL string, body a
 		_ = json.Unmarshal(data, &response.Raw)
 	}
 	return nil
+}
+
+func isTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func (c *Client) url(path string) string {

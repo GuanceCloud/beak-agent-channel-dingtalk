@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -158,6 +159,33 @@ func TestDingTalkConnectorValidateCredentialReturnsInvalidOnTokenFailure(t *test
 	}
 	if result.Valid || result.AccountKey != "robot_bad" || !strings.Contains(result.Error, "bad secret") {
 		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestDingTalkConnectorValidateCredentialReturnsInvalidOnTokenTimeout(t *testing.T) {
+	httpClient := &http.Client{Transport: testRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/v1.0/oauth2/accessToken" {
+			t.Fatalf("unexpected request: %s", req.URL.Path)
+		}
+		return nil, &url.Error{Op: "Post", URL: req.URL.String(), Err: context.DeadlineExceeded}
+	})}
+
+	result, err := NewConnector().ValidateCredential(context.Background(), sdk.CredentialValidationRequest{
+		Credential: map[string]any{
+			"client_id":     "client_timeout",
+			"client_secret": "secret_timeout",
+			"robot_code":    "robot_timeout",
+		},
+		Runtime: sdk.Runtime{HTTPClient: httpClient},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Valid || result.AccountKey != "robot_timeout" || !strings.Contains(result.Error, "timed out while waiting for DingTalk API response") {
+		t.Fatalf("result=%+v", result)
+	}
+	if strings.Contains(result.Error, "Client.Timeout exceeded") || strings.Contains(result.Error, "context deadline exceeded") {
+		t.Fatalf("timeout leaked low-level error: %q", result.Error)
 	}
 }
 
