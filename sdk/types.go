@@ -83,6 +83,8 @@ type StreamFrameResult struct {
 	HealthUpdates  map[string]any
 	EventResult    *StreamEventResult
 	CloseReason    string
+	PingInterval   time.Duration
+	PongTimeout    time.Duration
 	State          any
 }
 

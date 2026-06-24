@@ -801,6 +801,9 @@ func clientFromAccount(runtime sdk.Runtime, account sdk.ChannelAccount) *dingtal
 }
 
 func baseURLFromCredential(credential map[string]any) string {
+	if baseURL := strings.TrimSpace(stringValue(credential["base_url"])); baseURL != "" {
+		return strings.TrimRight(baseURL, "/")
+	}
 	return dingtalk.DefaultBaseURL
 }
 

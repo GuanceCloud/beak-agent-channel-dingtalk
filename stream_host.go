@@ -1,15 +1,16 @@
 package beakdingtalk
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"time"
 
 	"github.com/GuanceCloud/beak-agent-channel-dingtalk/sdk"
-	dtclient "github.com/open-dingtalk/dingtalk-stream-sdk-go/client"
-	dthandler "github.com/open-dingtalk/dingtalk-stream-sdk-go/handler"
 	dtpayload "github.com/open-dingtalk/dingtalk-stream-sdk-go/payload"
 	dtutils "github.com/open-dingtalk/dingtalk-stream-sdk-go/utils"
 )
@@ -17,7 +18,7 @@ import (
 const dingtalkDefaultPingInterval = 120 * time.Second
 const dingtalkDefaultPongTimeout = 5 * time.Second
 
-func (c Connector) ConnectStream(ctx context.Context, _ sdk.Runtime, account sdk.ChannelAccount) (*sdk.StreamConnectResult, error) {
+func (c Connector) ConnectStream(ctx context.Context, runtime sdk.Runtime, account sdk.ChannelAccount) (*sdk.StreamConnectResult, error) {
 	clientID := strings.TrimSpace(stringValue(account.Credential["client_id"]))
 	clientSecret := strings.TrimSpace(stringValue(account.Credential["client_secret"]))
 	if clientID == "" {
@@ -26,7 +27,7 @@ func (c Connector) ConnectStream(ctx context.Context, _ sdk.Runtime, account sdk
 	if clientSecret == "" {
 		return nil, fmt.Errorf("dingtalk stream client_secret is required")
 	}
-	endpoint, err := dingtalkConnectionEndpoint(ctx, clientID, clientSecret)
+	endpoint, err := dingtalkConnectionEndpoint(ctx, runtime.HTTPClient, baseURLFromCredential(account.Credential), clientID, clientSecret)
 	if err != nil {
 		return nil, err
 	}
@@ -107,6 +108,11 @@ func (c Connector) handleDingTalkStreamDataFrame(ctx context.Context, runtime sd
 			return nil, err
 		}
 		out.EventResult = dingtalkStreamEventResult(result)
+		if result != nil && !result.Ignored && strings.TrimSpace(result.MessageUUID) != "" {
+			now := time.Now().UTC().Format(time.RFC3339Nano)
+			out.HealthUpdates[sdk.RuntimeHealthKeyStreamLastEventAt] = now
+			out.HealthUpdates[sdk.RuntimeHealthKeyStreamLastActivityAt] = now
+		}
 		return dtpayload.NewSuccessDataFrameResponse(), nil
 	default:
 		return dtpayload.NewDataFrameResponse(dtpayload.DataFrameResponseStatusCodeKHandlerNotFound), nil
@@ -139,18 +145,56 @@ func (c Connector) handleDingTalkStreamSystemFrame(frame *dtpayload.DataFrame, o
 	}
 }
 
-func dingtalkConnectionEndpoint(ctx context.Context, clientID, clientSecret string) (*dtpayload.ConnectionEndpointResponse, error) {
-	client := dtclient.NewStreamClient(
-		dtclient.WithAppCredential(dtclient.NewAppCredentialConfig(clientID, clientSecret)),
-		dtclient.WithAutoReconnect(false),
-	)
-	noop := dthandler.IFrameHandler(func(context.Context, *dtpayload.DataFrame) (*dtpayload.DataFrameResponse, error) {
-		return dtpayload.NewSuccessDataFrameResponse(), nil
-	})
-	client.RegisterRouter(dtutils.SubscriptionTypeKSystem, "ping", noop)
-	client.RegisterRouter(dtutils.SubscriptionTypeKSystem, "disconnect", noop)
-	client.RegisterRouter(dtutils.SubscriptionTypeKCallback, dtpayload.BotMessageCallbackTopic, noop)
-	return client.GetConnectionEndpoint(ctx)
+func dingtalkConnectionEndpoint(ctx context.Context, httpClient *http.Client, baseURL, clientID, clientSecret string) (*dtpayload.ConnectionEndpointResponse, error) {
+	requestModel := dtpayload.ConnectionEndpointRequest{
+		ClientId:     clientID,
+		ClientSecret: clientSecret,
+		UserAgent:    "dingtalk-sdk-go/v0.9.1",
+		Subscriptions: []*dtpayload.SubscriptionModel{
+			{Type: dtutils.SubscriptionTypeKSystem, Topic: "ping"},
+			{Type: dtutils.SubscriptionTypeKSystem, Topic: "disconnect"},
+			{Type: dtutils.SubscriptionTypeKCallback, Topic: dtpayload.BotMessageCallbackTopic},
+		},
+	}
+	if localIP, err := dtutils.GetFirstLanIP(); err == nil {
+		requestModel.LocalIP = localIP
+	}
+	requestBody, err := json.Marshal(requestModel)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(baseURL) == "" {
+		baseURL = dtutils.DefaultOpenApiHost
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+dtutils.GetConnectionEndpointAPIUrl, bytes.NewReader(requestBody))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("dingtalk stream endpoint failed: status=%s body=%s", resp.Status, string(responseBody))
+	}
+	var endpoint dtpayload.ConnectionEndpointResponse
+	if err := json.Unmarshal(responseBody, &endpoint); err != nil {
+		return nil, err
+	}
+	if err := endpoint.Valid(); err != nil {
+		return nil, err
+	}
+	return &endpoint, nil
 }
 
 func dingtalkFrameMessageID(frame *dtpayload.DataFrame) string {
