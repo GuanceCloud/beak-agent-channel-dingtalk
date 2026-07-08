@@ -19,9 +19,10 @@ func TestIdentityHelpers(t *testing.T) {
 
 func TestOutboundMessageCommonFormatContract(t *testing.T) {
 	data, err := json.Marshal(OutboundMessage{
-		Text:   "# 日志查询\n- 错误日志",
-		Format: "markdown",
-		Title:  "日志查询",
+		Text:     "# 日志查询\n- 错误日志",
+		Format:   "markdown",
+		Title:    "日志查询",
+		ThreadID: "thread-1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -30,7 +31,7 @@ func TestOutboundMessageCommonFormatContract(t *testing.T) {
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if decoded["text"] != "# 日志查询\n- 错误日志" || decoded["format"] != "markdown" || decoded["title"] != "日志查询" {
+	if decoded["text"] != "# 日志查询\n- 错误日志" || decoded["format"] != "markdown" || decoded["title"] != "日志查询" || decoded["thread_id"] != "thread-1" {
 		t.Fatalf("common outbound json=%+v", decoded)
 	}
 }

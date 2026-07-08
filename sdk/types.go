@@ -278,6 +278,7 @@ type OutboundMessage struct {
 	MessageUUID   string `json:"message_uuid"`
 	ChatType      string `json:"chat_type"`
 	ChatID        string `json:"chat_id"`
+	ThreadID      string `json:"thread_id,omitempty"`
 	Text          string `json:"text"`
 	// Format is a common host-facing field. Set "markdown" for rich rendering;
 	// each SDK maps it to platform-native delivery or falls back internally.
