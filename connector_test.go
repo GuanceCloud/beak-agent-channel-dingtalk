@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GuanceCloud/beak-agent-channel-dingtalk/internal/dingtalk"
 	"github.com/GuanceCloud/beak-agent-channel-dingtalk/sdk"
 	beakstate "github.com/GuanceCloud/beak-agent-channel-dingtalk/state"
 )
@@ -90,6 +91,78 @@ func TestDingTalkConnectorAcknowledgeUnsupported(t *testing.T) {
 	}
 	if result.Status != "unsupported" || result.Mode != "unsupported" || result.AccountUUID != "account-1" {
 		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestBuildInboundMessageReferencedMessage(t *testing.T) {
+	event := &dingtalk.StreamEvent{
+		ConversationType:  dingtalk.ConversationTypeGroup,
+		ConversationID:    "cid-1",
+		ConversationTitle: "ops",
+		SenderStaffID:     "staff-1",
+		SenderNick:        "Alice",
+		MsgID:             "msg-1",
+		MsgType:           "text",
+		Raw: map[string]any{
+			"text": map[string]any{
+				"content":    "current",
+				"isReplyMsg": true,
+				"repliedMsg": map[string]any{
+					"msgId":      "quoted-1",
+					"msgType":    "text",
+					"senderId":   "staff-2",
+					"senderNick": "Bob",
+					"content": map[string]any{
+						"text": "quoted text",
+					},
+				},
+			},
+		},
+	}
+	inbound := BuildInboundMessage("workspace-1", "channel-1", "account-1", event, "current")
+	if inbound.Text != "current" {
+		t.Fatalf("text=%q", inbound.Text)
+	}
+	if inbound.ReferencedMessage == nil {
+		t.Fatal("referenced_message is nil")
+	}
+	if inbound.ReferencedMessage.MessageID != "quoted-1" || inbound.ReferencedMessage.Text != "quoted text" || inbound.ReferencedMessage.SenderID != "staff-2" || inbound.ReferencedMessage.SenderDisplayName != "Bob" {
+		t.Fatalf("referenced_message=%+v", inbound.ReferencedMessage)
+	}
+}
+
+func TestBuildInboundMessageReferencedMessageTopLevelReply(t *testing.T) {
+	event := &dingtalk.StreamEvent{
+		ConversationType:  dingtalk.ConversationTypeGroup,
+		ConversationID:    "cid-1",
+		ConversationTitle: "ops",
+		SenderStaffID:     "staff-1",
+		SenderNick:        "Alice",
+		MsgID:             "msg-1",
+		MsgType:           "reply",
+		Raw: map[string]any{
+			"content":    "current",
+			"isReplyMsg": true,
+			"repliedMsg": map[string]any{
+				"msgId":      "quoted-1",
+				"msgType":    "text",
+				"senderId":   "staff-2",
+				"senderNick": "Bob",
+				"content": map[string]any{
+					"text": "quoted text",
+				},
+			},
+		},
+	}
+	if got := event.Text(); got != "current" {
+		t.Fatalf("event text=%q", got)
+	}
+	inbound := BuildInboundMessage("workspace-1", "channel-1", "account-1", event, event.Text())
+	if inbound.ReferencedMessage == nil {
+		t.Fatal("referenced_message is nil")
+	}
+	if inbound.ReferencedMessage.MessageID != "quoted-1" || inbound.ReferencedMessage.Text != "quoted text" {
+		t.Fatalf("referenced_message=%+v", inbound.ReferencedMessage)
 	}
 }
 

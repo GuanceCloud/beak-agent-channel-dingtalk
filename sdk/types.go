@@ -234,25 +234,41 @@ type LoginStatus struct {
 }
 
 type InboundMessage struct {
-	WorkspaceUUID     string            `json:"workspace_uuid"`
-	Platform          string            `json:"platform"`
-	AccountUUID       string            `json:"account_uuid"`
-	ChannelUUID       string            `json:"channel_uuid"`
-	ChatType          string            `json:"chat_type"`
-	ChatID            string            `json:"chat_id"`
-	ThreadID          string            `json:"thread_id,omitempty"`
-	ChatDisplayName   string            `json:"chat_display_name,omitempty"`
-	ChatAvatarURL     string            `json:"chat_avatar_url,omitempty"`
-	ChatIdentity      ChatIdentity      `json:"chat_identity,omitempty"`
-	SenderID          string            `json:"sender_id"`
-	SenderDisplayName string            `json:"sender_display_name,omitempty"`
-	MessageID         string            `json:"message_id,omitempty"`
-	Text              string            `json:"text"`
-	DedupeKey         string            `json:"dedupe_key,omitempty"`
-	Mentions          []MentionIdentity `json:"mentions,omitempty"`
-	MentionedMe       bool              `json:"mentioned_me,omitempty"`
-	MentionAll        bool              `json:"mention_all,omitempty"`
-	Raw               map[string]any    `json:"raw,omitempty"`
+	WorkspaceUUID     string             `json:"workspace_uuid"`
+	Platform          string             `json:"platform"`
+	AccountUUID       string             `json:"account_uuid"`
+	ChannelUUID       string             `json:"channel_uuid"`
+	ChatType          string             `json:"chat_type"`
+	ChatID            string             `json:"chat_id"`
+	ThreadID          string             `json:"thread_id,omitempty"`
+	ChatDisplayName   string             `json:"chat_display_name,omitempty"`
+	ChatAvatarURL     string             `json:"chat_avatar_url,omitempty"`
+	ChatIdentity      ChatIdentity       `json:"chat_identity,omitempty"`
+	SenderID          string             `json:"sender_id"`
+	SenderDisplayName string             `json:"sender_display_name,omitempty"`
+	MessageID         string             `json:"message_id,omitempty"`
+	Text              string             `json:"text"`
+	ReferencedMessage *ReferencedMessage `json:"referenced_message,omitempty"`
+	DedupeKey         string             `json:"dedupe_key,omitempty"`
+	Mentions          []MentionIdentity  `json:"mentions,omitempty"`
+	MentionedMe       bool               `json:"mentioned_me,omitempty"`
+	MentionAll        bool               `json:"mention_all,omitempty"`
+	Raw               map[string]any     `json:"raw,omitempty"`
+}
+
+type ReferencedMessage struct {
+	Platform          string         `json:"platform,omitempty"`
+	MessageID         string         `json:"message_id,omitempty"`
+	ChatType          string         `json:"chat_type,omitempty"`
+	ChatID            string         `json:"chat_id,omitempty"`
+	ThreadID          string         `json:"thread_id,omitempty"`
+	RootID            string         `json:"root_id,omitempty"`
+	SenderID          string         `json:"sender_id,omitempty"`
+	SenderDisplayName string         `json:"sender_display_name,omitempty"`
+	MessageType       string         `json:"message_type,omitempty"`
+	Text              string         `json:"text,omitempty"`
+	CreatedAt         string         `json:"created_at,omitempty"`
+	Raw               map[string]any `json:"raw,omitempty"`
 }
 
 type MentionIdentity struct {

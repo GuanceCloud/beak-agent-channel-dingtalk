@@ -510,6 +510,7 @@ func BuildInboundMessage(workspaceUUID, channelUUID, accountUUID string, event *
 		SenderDisplayName: event.SenderNick,
 		MessageID:         event.MsgID,
 		Text:              text,
+		ReferencedMessage: dingtalkReferencedMessage(event),
 		DedupeKey:         event.DedupeKey(accountUUID),
 		Mentions:          mentions,
 		MentionedMe:       event.IsInAtList,
@@ -539,6 +540,153 @@ func BuildInboundMessage(workspaceUUID, channelUUID, accountUUID string, event *
 			"chatbot_corp_id":            event.ChatbotCorpID,
 		},
 	}
+}
+
+func dingtalkReferencedMessage(event *dingtalk.StreamEvent) *sdk.ReferencedMessage {
+	if event == nil {
+		return nil
+	}
+	replied := dingtalkRepliedMessage(event)
+	if replied == nil {
+		return nil
+	}
+	chat := event.ChatIdentity()
+	messageType := strings.TrimSpace(firstString(replied["msgType"], replied["msgtype"], replied["message_type"]))
+	text := strings.TrimSpace(dingtalkReferencedMessageText(replied, 3))
+	return &sdk.ReferencedMessage{
+		Platform:          Platform,
+		MessageID:         strings.TrimSpace(firstString(replied["msgId"], replied["msgID"], replied["message_id"])),
+		ChatType:          chat.ChatType,
+		ChatID:            chat.ChatID,
+		SenderID:          strings.TrimSpace(firstString(replied["senderId"], replied["senderStaffId"], replied["sender_id"])),
+		SenderDisplayName: strings.TrimSpace(firstString(replied["senderNick"], replied["senderName"], replied["sender_name"])),
+		MessageType:       firstString(messageType, "text"),
+		Text:              text,
+		Raw:               replied,
+	}
+}
+
+func dingtalkRepliedMessage(event *dingtalk.StreamEvent) map[string]any {
+	if event == nil || event.Raw == nil {
+		return nil
+	}
+	for _, value := range []any{event.Raw["text"], event.Raw["content"], event.Raw} {
+		container := mapValue(value)
+		if container == nil {
+			continue
+		}
+		if !dingtalkReplyContainer(event, container) {
+			continue
+		}
+		if replied := mapValue(firstValue(
+			container["repliedMsg"],
+			container["replied_msg"],
+			container["replyMessage"],
+			container["reply_message"],
+		)); replied != nil {
+			return replied
+		}
+	}
+	return nil
+}
+
+func dingtalkReplyContainer(event *dingtalk.StreamEvent, container map[string]any) bool {
+	if boolValue(container["isReplyMsg"]) {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(event.MsgType), "reply") {
+		return true
+	}
+	containerMsgType := strings.TrimSpace(firstString(container["msgType"], container["msgtype"], container["message_type"]))
+	return strings.EqualFold(containerMsgType, "reply")
+}
+
+func dingtalkReferencedMessageText(replied map[string]any, maxDepth int) string {
+	if replied == nil || maxDepth <= 0 {
+		return ""
+	}
+	msgType := strings.TrimSpace(firstString(replied["msgType"], replied["msgtype"], replied["message_type"]))
+	if msgType == "" {
+		msgType = "text"
+	}
+	content := mapValue(replied["content"])
+	if content == nil {
+		if contentString := strings.TrimSpace(firstString(replied["content"])); contentString != "" {
+			var decoded map[string]any
+			if err := json.Unmarshal([]byte(contentString), &decoded); err == nil {
+				content = decoded
+			}
+		}
+	}
+	var text string
+	switch msgType {
+	case "text", "markdown":
+		text = firstString(mapString(content, "text"), mapString(content, "content"), replied["text"])
+	case "richText":
+		text = dingtalkReferencedRichText(content)
+	case "picture":
+		text = "[图片]"
+	case "video":
+		text = "[视频]"
+	case "audio":
+		text = firstString(mapString(content, "recognition"), "[语音消息]")
+	case "file":
+		fileName := firstString(mapString(content, "fileName"), mapString(content, "file_name"), "unknown")
+		text = "[文件: " + fileName + "]"
+	case "interactiveCard":
+		text = firstString(mapString(content, "title"), mapString(content, "text"), "[interactiveCard消息]")
+	default:
+		text = firstString(mapString(content, "text"), mapString(content, "content"), "["+msgType+"消息]")
+	}
+	if content != nil && boolValue(content["isReplyMsg"]) {
+		if nested := dingtalkReferencedMessageText(mapValue(content["repliedMsg"]), maxDepth-1); nested != "" {
+			if strings.TrimSpace(text) == "" {
+				text = nested
+			} else {
+				text = strings.TrimSpace(text) + "\n" + nested
+			}
+		}
+	}
+	return strings.TrimSpace(text)
+}
+
+func dingtalkReferencedRichText(content map[string]any) string {
+	if content == nil {
+		return ""
+	}
+	items, _ := content["richText"].([]any)
+	if len(items) == 0 {
+		items, _ = content["richTextList"].([]any)
+	}
+	var out strings.Builder
+	for _, item := range items {
+		el := mapValue(item)
+		if el == nil || el["skillData"] != nil {
+			continue
+		}
+		out.WriteString(firstString(el["text"], el["content"]))
+	}
+	return strings.TrimSpace(out.String())
+}
+
+func mapValue(value any) map[string]any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return typed
+	case string:
+		var decoded map[string]any
+		if err := json.Unmarshal([]byte(typed), &decoded); err == nil {
+			return decoded
+		}
+	}
+	return nil
+}
+
+func mapString(value map[string]any, key string) string {
+	if value == nil {
+		return ""
+	}
+	return firstString(value[key])
 }
 
 func dingtalkSDKChatIdentity(chat dingtalk.ChatIdentity) sdk.ChatIdentity {

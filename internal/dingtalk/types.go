@@ -210,7 +210,7 @@ func (c ChatIdentity) StateKey() string {
 
 func (e StreamEvent) Text() string {
 	switch strings.TrimSpace(e.MsgType) {
-	case "", "text":
+	case "", "text", "reply":
 		text := pathString(e.Raw, "text", "content")
 		if text == "" {
 			text = pathString(e.Raw, "content", "text")
