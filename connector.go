@@ -610,18 +610,21 @@ func dingtalkReferencedMessageText(replied map[string]any, maxDepth int) string 
 		msgType = "text"
 	}
 	content := mapValue(replied["content"])
+	var contentText string
 	if content == nil {
 		if contentString := strings.TrimSpace(firstString(replied["content"])); contentString != "" {
 			var decoded map[string]any
 			if err := json.Unmarshal([]byte(contentString), &decoded); err == nil {
 				content = decoded
+			} else {
+				contentText = contentString
 			}
 		}
 	}
 	var text string
 	switch msgType {
 	case "text", "markdown":
-		text = firstString(mapString(content, "text"), mapString(content, "content"), replied["text"])
+		text = firstString(mapString(content, "text"), mapString(content, "content"), replied["text"], contentText)
 	case "richText":
 		text = dingtalkReferencedRichText(content)
 	case "picture":
@@ -656,6 +659,11 @@ func dingtalkReferencedRichText(content map[string]any) string {
 	}
 	items, _ := content["richText"].([]any)
 	if len(items) == 0 {
+		if richText := mapValue(content["richText"]); richText != nil {
+			items, _ = richText["richTextList"].([]any)
+		}
+	}
+	if len(items) == 0 {
 		items, _ = content["richTextList"].([]any)
 	}
 	var out strings.Builder
@@ -664,7 +672,13 @@ func dingtalkReferencedRichText(content map[string]any) string {
 		if el == nil || el["skillData"] != nil {
 			continue
 		}
-		out.WriteString(firstString(el["text"], el["content"]))
+		if text := stringValue(el["text"]); strings.TrimSpace(text) != "" {
+			out.WriteString(text)
+			continue
+		}
+		if text := stringValue(el["content"]); strings.TrimSpace(text) != "" {
+			out.WriteString(text)
+		}
 	}
 	return strings.TrimSpace(out.String())
 }

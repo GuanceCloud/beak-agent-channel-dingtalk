@@ -166,6 +166,74 @@ func TestBuildInboundMessageReferencedMessageTopLevelReply(t *testing.T) {
 	}
 }
 
+func TestBuildInboundMessageReferencedMessagePlainContentString(t *testing.T) {
+	event := &dingtalk.StreamEvent{
+		ConversationType:  dingtalk.ConversationTypeGroup,
+		ConversationID:    "cid-1",
+		ConversationTitle: "ops",
+		SenderStaffID:     "staff-1",
+		SenderNick:        "Alice",
+		MsgID:             "msg-1",
+		MsgType:           "reply",
+		Raw: map[string]any{
+			"content":    "current",
+			"isReplyMsg": true,
+			"repliedMsg": map[string]any{
+				"msgId":      "quoted-1",
+				"msgType":    "text",
+				"senderId":   "staff-2",
+				"senderNick": "Bob",
+				"content":    "quoted plain text",
+			},
+		},
+	}
+	inbound := BuildInboundMessage("workspace-1", "channel-1", "account-1", event, event.Text())
+	if inbound.ReferencedMessage == nil {
+		t.Fatal("referenced_message is nil")
+	}
+	if inbound.ReferencedMessage.Text != "quoted plain text" {
+		t.Fatalf("referenced_message=%+v", inbound.ReferencedMessage)
+	}
+}
+
+func TestBuildInboundMessageReferencedMessageNestedRichText(t *testing.T) {
+	event := &dingtalk.StreamEvent{
+		ConversationType:  dingtalk.ConversationTypeGroup,
+		ConversationID:    "cid-1",
+		ConversationTitle: "ops",
+		SenderStaffID:     "staff-1",
+		SenderNick:        "Alice",
+		MsgID:             "msg-1",
+		MsgType:           "reply",
+		Raw: map[string]any{
+			"content":    "current",
+			"isReplyMsg": true,
+			"repliedMsg": map[string]any{
+				"msgId":      "quoted-1",
+				"msgType":    "richText",
+				"senderId":   "staff-2",
+				"senderNick": "Bob",
+				"content": map[string]any{
+					"richText": map[string]any{
+						"richTextList": []any{
+							map[string]any{"text": "quoted "},
+							map[string]any{"content": "rich text"},
+							map[string]any{"text": "ignored", "skillData": map[string]any{"type": "card"}},
+						},
+					},
+				},
+			},
+		},
+	}
+	inbound := BuildInboundMessage("workspace-1", "channel-1", "account-1", event, event.Text())
+	if inbound.ReferencedMessage == nil {
+		t.Fatal("referenced_message is nil")
+	}
+	if inbound.ReferencedMessage.Text != "quoted rich text" {
+		t.Fatalf("referenced_message=%+v", inbound.ReferencedMessage)
+	}
+}
+
 func TestDingTalkConnectorValidateCredentialFetchesAccessToken(t *testing.T) {
 	var sawToken bool
 	httpClient := &http.Client{Transport: testRoundTripFunc(func(req *http.Request) (*http.Response, error) {
