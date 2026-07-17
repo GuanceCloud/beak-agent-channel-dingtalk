@@ -18,6 +18,9 @@ const (
 	RuntimeOwnershipHostStream = "host_stream"
 	RuntimeOwnershipSDKOwned   = "sdk_owned"
 
+	WebhookRegistrationManual    = "manual"
+	WebhookRegistrationAutomatic = "automatic"
+
 	StreamMessageTypeText   = 1
 	StreamMessageTypeBinary = 2
 	StreamMessageTypePing   = 9
@@ -146,16 +149,17 @@ type ConnectorMetadata struct {
 }
 
 type Capabilities struct {
-	LoginModes       []string `json:"login_modes"`
-	Text             bool     `json:"text"`
-	Media            bool     `json:"media"`
-	GroupChat        bool     `json:"group_chat"`
-	DirectChat       bool     `json:"direct_chat"`
-	Stream           bool     `json:"stream"`
-	Webhook          bool     `json:"webhook"`
-	BlockStreaming   bool     `json:"block_streaming"`
-	AckModes         []string `json:"ack_modes,omitempty"`
-	RuntimeOwnership string   `json:"runtime_ownership,omitempty"`
+	LoginModes          []string `json:"login_modes"`
+	Text                bool     `json:"text"`
+	Media               bool     `json:"media"`
+	GroupChat           bool     `json:"group_chat"`
+	DirectChat          bool     `json:"direct_chat"`
+	Stream              bool     `json:"stream"`
+	Webhook             bool     `json:"webhook"`
+	WebhookRegistration string   `json:"webhook_registration,omitempty"`
+	BlockStreaming      bool     `json:"block_streaming"`
+	AckModes            []string `json:"ack_modes,omitempty"`
+	RuntimeOwnership    string   `json:"runtime_ownership,omitempty"`
 }
 
 type CredentialSchema struct {
@@ -192,11 +196,20 @@ type CredentialValidationResult struct {
 	Error       string         `json:"error,omitempty"`
 }
 
+// WebhookEndpoint describes the host-owned callback endpoint for one account.
+// Platform credentials and verification secrets remain in ChannelAccount.Credential.
+type WebhookEndpoint struct {
+	URL string
+}
+
 type Runtime struct {
-	WorkspaceUUID   string
-	Channel         Channel
-	Account         ChannelAccount
-	Accounts        []ChannelAccount
+	WorkspaceUUID string
+	Channel       Channel
+	Account       ChannelAccount
+	Accounts      []ChannelAccount
+	// Webhook is optional and is populated by hosts for webhook-owned
+	// runtimes. It is runtime configuration, not user credential.
+	Webhook         *WebhookEndpoint
 	Gateway         Gateway
 	AccountStore    AccountStore
 	HTTPClient      *http.Client
