@@ -98,6 +98,8 @@ type StreamConnectResult struct {
 	Headers         map[string]string
 	ServiceID       string
 	ReadMessageType int
+	InitialFrames   []StreamFrame
+	WaitForReady    bool
 	PingInterval    time.Duration
 	PongTimeout     time.Duration
 	State           any
@@ -123,6 +125,9 @@ type StreamFrame struct {
 
 type StreamFrameResult struct {
 	ResponseFrames []StreamFrame
+	ResponseTo     string
+	Ready          bool
+	Terminal       bool
 	HealthUpdates  map[string]any
 	EventResult    *StreamEventResult
 	CloseReason    string
@@ -212,11 +217,31 @@ type Runtime struct {
 	Webhook         *WebhookEndpoint
 	Gateway         Gateway
 	AccountStore    AccountStore
+	Stream          StreamTransport
 	HTTPClient      *http.Client
 	Logger          *log.Logger
 	PollInterval    time.Duration
 	StreamReconnect time.Duration
 	Native          any
+}
+
+// StreamTransport lets an SDK send a request over the host-owned stream that
+// belongs to the current account. CorrelationID is opaque to the host; the SDK
+// returns the matching value in StreamFrameResult.ResponseTo when the platform
+// response arrives.
+type StreamTransport interface {
+	Request(ctx context.Context, req StreamRequest) (*StreamResponse, error)
+}
+
+type StreamRequest struct {
+	Frame         StreamFrame
+	CorrelationID string
+	Timeout       time.Duration
+}
+
+type StreamResponse struct {
+	Frame         StreamFrame
+	CorrelationID string
 }
 
 type Gateway interface {
