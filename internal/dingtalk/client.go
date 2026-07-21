@@ -54,10 +54,10 @@ func (c *Client) TokenWithExpiry(ctx context.Context, now time.Time) (string, ti
 		return c.AccessToken, c.AccessTokenExpiresAt, nil
 	}
 	if strings.TrimSpace(c.ClientID) == "" {
-		return "", time.Time{}, fmt.Errorf("client_id is required")
+		return "", time.Time{}, credentialRejected("client_id is required")
 	}
 	if strings.TrimSpace(c.ClientSecret) == "" {
-		return "", time.Time{}, fmt.Errorf("client_secret is required")
+		return "", time.Time{}, credentialRejected("client_secret is required")
 	}
 	var resp TokenResponse
 	if err := c.doJSON(ctx, http.MethodPost, "/v1.0/oauth2/accessToken", map[string]any{
@@ -67,7 +67,11 @@ func (c *Client) TokenWithExpiry(ctx context.Context, now time.Time) (string, ti
 		return "", time.Time{}, err
 	}
 	if resp.AccessToken == "" {
-		return "", time.Time{}, fmt.Errorf("dingtalk access token failed: code=%s message=%s", resp.Code, resp.Message)
+		message := fmt.Sprintf("dingtalk access token failed: code=%s message=%s", resp.Code, resp.Message)
+		if credentialResponseRejected(resp.Code, resp.Message) {
+			return "", time.Time{}, credentialRejected(message)
+		}
+		return "", time.Time{}, transientFailure(message)
 	}
 	expiresIn := resp.ExpireIn
 	if expiresIn <= 0 {
@@ -429,13 +433,13 @@ func (c *Client) doJSONURL(ctx context.Context, method, targetURL string, body a
 	resp, err := client.Do(req)
 	if err != nil {
 		if isTimeoutError(err) {
-			return fmt.Errorf("%s %s timed out while waiting for DingTalk API response", method, sanitizeURLForError(targetURL))
+			return &transportError{message: fmt.Sprintf("%s %s timed out while waiting for DingTalk API response", method, sanitizeURLForError(targetURL)), cause: context.DeadlineExceeded}
 		}
 		var urlErr *neturl.Error
 		if errors.As(err, &urlErr) {
-			return fmt.Errorf("%s %s failed: %v", method, sanitizeURLForError(targetURL), urlErr.Err)
+			return &transportError{message: fmt.Sprintf("%s %s failed: %v", method, sanitizeURLForError(targetURL), urlErr.Err), cause: urlErr.Err}
 		}
-		return fmt.Errorf("%s %s failed: %w", method, sanitizeURLForError(targetURL), err)
+		return &transportError{message: fmt.Sprintf("%s %s failed: %v", method, sanitizeURLForError(targetURL), err), cause: err}
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(resp.Body)
@@ -443,13 +447,13 @@ func (c *Client) doJSONURL(ctx context.Context, method, targetURL string, body a
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("%s %s failed: status=%d body=%s", method, sanitizeURLForError(targetURL), resp.StatusCode, string(data))
+		return &HTTPError{StatusCode: resp.StatusCode, Method: method, Target: sanitizeURLForError(targetURL), Body: string(data)}
 	}
 	if out == nil || len(bytes.TrimSpace(data)) == 0 {
 		return nil
 	}
 	if err := json.Unmarshal(data, out); err != nil {
-		return fmt.Errorf("decode response: %w", err)
+		return transientFailure(fmt.Sprintf("decode response: %v", err))
 	}
 	switch response := out.(type) {
 	case *SendTextResponse:

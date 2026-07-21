@@ -288,7 +288,9 @@ func TestDingTalkConnectorValidateCredentialReturnsInvalidOnTokenFailure(t *test
 		if req.URL.Path != "/v1.0/oauth2/accessToken" {
 			t.Fatalf("unexpected request: %s", req.URL.Path)
 		}
-		return testJSONResponse(map[string]any{"code": "InvalidAppSecret", "message": "bad secret"})
+		response, err := testJSONResponse(map[string]any{"code": "InvalidAppSecret", "message": "bad secret"})
+		response.StatusCode = http.StatusBadRequest
+		return response, err
 	})}
 
 	result, err := NewConnector().ValidateCredential(context.Background(), sdk.CredentialValidationRequest{
@@ -303,11 +305,13 @@ func TestDingTalkConnectorValidateCredentialReturnsInvalidOnTokenFailure(t *test
 	}
 }
 
-func TestDingTalkConnectorValidateCredentialReturnsInvalidOnTokenTimeout(t *testing.T) {
+func TestDingTalkConnectorValidateCredentialReturnsGoErrorOnTokenTimeout(t *testing.T) {
+	var calls int
 	httpClient := &http.Client{Transport: testRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if req.URL.Path != "/v1.0/oauth2/accessToken" {
 			t.Fatalf("unexpected request: %s", req.URL.Path)
 		}
+		calls++
 		return nil, &url.Error{Op: "Post", URL: req.URL.String(), Err: context.DeadlineExceeded}
 	})}
 
@@ -319,14 +323,58 @@ func TestDingTalkConnectorValidateCredentialReturnsInvalidOnTokenTimeout(t *test
 		},
 		Runtime: sdk.Runtime{HTTPClient: httpClient},
 	})
-	if err != nil {
-		t.Fatal(err)
+	if err == nil || !strings.Contains(err.Error(), "timed out while waiting for DingTalk API response") {
+		t.Fatalf("result=%+v error=%v, want transient Go error", result, err)
 	}
-	if result.Valid || result.AccountKey != "robot_timeout" || !strings.Contains(result.Error, "timed out while waiting for DingTalk API response") {
-		t.Fatalf("result=%+v", result)
+	if result != nil {
+		t.Fatalf("result=%+v, want nil on transient failure", result)
 	}
-	if strings.Contains(result.Error, "Client.Timeout exceeded") || strings.Contains(result.Error, "context deadline exceeded") {
-		t.Fatalf("timeout leaked low-level error: %q", result.Error)
+	if calls != credentialValidationAttempts {
+		t.Fatalf("token calls=%d, want %d", calls, credentialValidationAttempts)
+	}
+	if strings.Contains(err.Error(), "Client.Timeout exceeded") || strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("timeout leaked low-level error: %q", err)
+	}
+}
+
+func TestDingTalkConnectorValidateCredentialRetriesTransientFailure(t *testing.T) {
+	var calls int
+	httpClient := &http.Client{Transport: testRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		if calls == 1 {
+			response, err := testJSONResponse(map[string]any{"message": "temporary"})
+			response.StatusCode = http.StatusServiceUnavailable
+			return response, err
+		}
+		return testJSONResponse(map[string]any{"accessToken": "token-recovered", "expireIn": 3600})
+	})}
+	result, err := NewConnector().ValidateCredential(context.Background(), sdk.CredentialValidationRequest{
+		Credential: map[string]any{"client_id": "client_retry", "client_secret": "secret_retry", "robot_code": "robot_retry"},
+		Runtime:    sdk.Runtime{HTTPClient: httpClient},
+	})
+	if err != nil || result == nil || !result.Valid {
+		t.Fatalf("result=%+v error=%v", result, err)
+	}
+	if calls != 2 {
+		t.Fatalf("token calls=%d, want 2", calls)
+	}
+}
+
+func TestDingTalkConnectorValidateCredentialDoesNotTreatMalformedSuccessAsInvalid(t *testing.T) {
+	var calls int
+	httpClient := &http.Client{Transport: testRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		return testJSONResponse(map[string]any{"code": "systemError", "message": "temporary platform failure"})
+	})}
+	result, err := NewConnector().ValidateCredential(context.Background(), sdk.CredentialValidationRequest{
+		Credential: map[string]any{"client_id": "client_malformed", "client_secret": "secret_malformed", "robot_code": "robot_malformed"},
+		Runtime:    sdk.Runtime{HTTPClient: httpClient},
+	})
+	if err == nil || result != nil || !strings.Contains(err.Error(), "systemError") {
+		t.Fatalf("result=%+v error=%v, want transient Go error", result, err)
+	}
+	if calls != credentialValidationAttempts {
+		t.Fatalf("token calls=%d, want %d", calls, credentialValidationAttempts)
 	}
 }
 

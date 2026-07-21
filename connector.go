@@ -23,6 +23,11 @@ import (
 
 var ErrCredentialLogin = errors.New("dingtalk connector uses credential login; create channel account from CredentialSchema")
 
+const (
+	credentialValidationAttempts   = 2
+	credentialValidationRetryDelay = 100 * time.Millisecond
+)
+
 type Connector struct {
 	channel Channel
 }
@@ -106,9 +111,12 @@ func (Connector) ValidateCredential(ctx context.Context, req sdk.CredentialValid
 	client.HTTPClient = req.Runtime.HTTPClient
 
 	now := time.Now().UTC()
-	token, expiresAt, err := client.TokenWithExpiry(ctx, now)
+	token, expiresAt, err := validateDingTalkCredential(ctx, client, now)
 	if err != nil {
-		return credentialValidationFailure(credential, state, err), nil
+		if dingtalk.IsCredentialRejected(err) {
+			return credentialValidationFailure(credential, state, err), nil
+		}
+		return nil, fmt.Errorf("dingtalk credential validation failed: %w", err)
 	}
 
 	robotCode := firstString(credential["robot_code"], credential["client_id"])
@@ -138,6 +146,35 @@ func (Connector) ValidateCredential(ctx context.Context, req sdk.CredentialValid
 			"robot_code": robotCode,
 		},
 	}, nil
+}
+
+func validateDingTalkCredential(ctx context.Context, client *dingtalk.Client, now time.Time) (string, time.Time, error) {
+	var lastErr error
+	for attempt := 0; attempt < credentialValidationAttempts; attempt++ {
+		token, expiresAt, err := client.TokenWithExpiry(ctx, now)
+		if err == nil {
+			return token, expiresAt, nil
+		}
+		lastErr = err
+		if dingtalk.IsCredentialRejected(err) || !dingtalk.IsRetryableError(err) || attempt+1 == credentialValidationAttempts {
+			break
+		}
+		if err := waitForCredentialRetry(ctx); err != nil {
+			return "", time.Time{}, err
+		}
+	}
+	return "", time.Time{}, lastErr
+}
+
+func waitForCredentialRetry(ctx context.Context) error {
+	timer := time.NewTimer(credentialValidationRetryDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (Connector) StartLogin(context.Context, sdk.LoginStartRequest) (*sdk.LoginChallenge, error) {
