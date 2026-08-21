@@ -42,6 +42,27 @@ type SendMarkdownRequest struct {
 	At          AtOptions
 }
 
+type SendMediaRequest struct {
+	ChatType    string
+	ChatID      string
+	Kind        string
+	MediaID     string
+	RobotCode   string
+	MessageUUID string
+}
+
+type MediaDownloadResponse struct {
+	DownloadURL string `json:"downloadUrl"`
+	Code        string `json:"code,omitempty"`
+	Message     string `json:"message,omitempty"`
+}
+
+type MediaUploadResponse struct {
+	DownloadCode string `json:"downloadCode"`
+	Code         string `json:"code,omitempty"`
+	Message      string `json:"message,omitempty"`
+}
+
 type AtOptions struct {
 	AtUserIDs     []string
 	AtDingtalkIDs []string

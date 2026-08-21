@@ -67,6 +67,7 @@ func (c Connector) Metadata() sdk.ConnectorMetadata {
 			LoginModes:       []string{sdk.LoginModeCredential},
 			Text:             caps.Text,
 			Media:            caps.Media,
+			MediaKinds:       append([]string(nil), caps.MediaKinds...),
 			GroupChat:        caps.GroupChat,
 			DirectChat:       caps.DirectChat,
 			Stream:           true,
@@ -234,6 +235,9 @@ func (c Connector) Send(ctx context.Context, runtime sdk.Runtime, req sdk.Outbou
 		return nil, err
 	}
 	accountUUID := accountKey(account)
+	if strings.TrimSpace(req.Text) == "" && len(req.Attachments) == 0 {
+		return nil, fmt.Errorf("%s outbound text or attachments are required", Platform)
+	}
 	store := newConnectorStateStore(runtime.AccountStore)
 	store.seed(account)
 	accountState, err := store.LoadAccount(ctx, accountUUID)
@@ -248,7 +252,7 @@ func (c Connector) Send(ctx context.Context, runtime sdk.Runtime, req sdk.Outbou
 	}
 	at := dingtalkOutboundAtOptions(req)
 	format := dingtalkOutboundFormat(req)
-	if !boolValue(req.Raw["force_openapi"]) {
+	if len(req.Attachments) == 0 && !boolValue(req.Raw["force_openapi"]) {
 		if webhook, ok := accountState.SessionWebhooks[outboundStateKey(req)]; ok && dingtalk.IsAllowedSessionWebhookURL(webhook.URL) && webhook.ExpiresAt.After(now.Add(10*time.Second)) {
 			var resp *dingtalk.WebhookSendResponse
 			var err error
@@ -292,44 +296,74 @@ func (c Connector) Send(ctx context.Context, runtime sdk.Runtime, req sdk.Outbou
 		}
 	}
 	robotCode := firstString(req.Raw["robot_code"], account.Credential["robot_code"], account.Credential["client_id"])
-	var resp *dingtalk.SendTextResponse
-	var sendErr error
-	if format == "markdown" {
-		resp, sendErr = client.SendMarkdown(ctx, dingtalk.SendMarkdownRequest{
-			ChatType:    req.ChatType,
-			ChatID:      strings.TrimSpace(req.ChatID),
-			Title:       dingtalkOutboundTitle(req),
-			Text:        req.Text,
-			RobotCode:   robotCode,
-			MessageUUID: req.MessageUUID,
-			At:          at,
-		})
-	} else {
-		resp, sendErr = client.SendText(ctx, dingtalk.SendTextRequest{
-			ChatType:    req.ChatType,
-			ChatID:      strings.TrimSpace(req.ChatID),
-			Text:        req.Text,
-			RobotCode:   robotCode,
-			MessageUUID: req.MessageUUID,
-			At:          at,
-		})
-	}
-	if sendErr != nil {
-		return nil, sendErr
-	}
-	return &sdk.SendResult{
+	result := &sdk.SendResult{
 		Platform:    Platform,
 		AccountUUID: accountUUID,
-		MessageID:   resp.ProcessQueryKey,
 		Raw: map[string]any{
-			"delivery_method":   "openapi",
-			"process_query_key": resp.ProcessQueryKey,
-			"chat_type":         req.ChatType,
-			"chat_id":           req.ChatID,
-			"msg_type":          format,
-			"response":          resp.Raw,
+			"delivery_method": "openapi",
+			"chat_type":       req.ChatType,
+			"chat_id":         req.ChatID,
+			"msg_type":        format,
 		},
-	}, nil
+	}
+	var attachmentErrors []string
+	if strings.TrimSpace(req.Text) != "" {
+		var resp *dingtalk.SendTextResponse
+		var sendErr error
+		if format == "markdown" {
+			resp, sendErr = client.SendMarkdown(ctx, dingtalk.SendMarkdownRequest{ChatType: req.ChatType, ChatID: strings.TrimSpace(req.ChatID), Title: dingtalkOutboundTitle(req), Text: req.Text, RobotCode: robotCode, MessageUUID: req.MessageUUID, At: at})
+		} else {
+			resp, sendErr = client.SendText(ctx, dingtalk.SendTextRequest{ChatType: req.ChatType, ChatID: strings.TrimSpace(req.ChatID), Text: req.Text, RobotCode: robotCode, MessageUUID: req.MessageUUID, At: at})
+		}
+		if sendErr != nil {
+			return nil, sendErr
+		}
+		result.MessageID = resp.ProcessQueryKey
+		result.Raw["process_query_key"] = resp.ProcessQueryKey
+		result.Raw["response"] = resp.Raw
+	}
+	for _, attachment := range req.Attachments {
+		item := sdk.AttachmentSendResult{AttachmentID: attachment.ID, Kind: attachment.Kind, Status: sdk.AttachmentStatusFailed}
+		if validateErr := sdk.ValidateMediaAttachment(attachment); validateErr != nil {
+			item.Error = validateErr.Error()
+			attachmentErrors = append(attachmentErrors, item.Error)
+			result.AttachmentResults = append(result.AttachmentResults, item)
+			continue
+		}
+		path := strings.TrimSpace(attachment.Path)
+		if path == "" {
+			item.Error = "dingtalk outbound attachment path is required"
+			attachmentErrors = append(attachmentErrors, item.Error)
+			result.AttachmentResults = append(result.AttachmentResults, item)
+			continue
+		}
+		mediaID, uploadErr := client.UploadMedia(ctx, path, attachment.Kind, robotCode, attachment.FileName)
+		if uploadErr != nil {
+			item.Error = uploadErr.Error()
+			attachmentErrors = append(attachmentErrors, item.Error)
+			result.AttachmentResults = append(result.AttachmentResults, item)
+			continue
+		}
+		resp, sendErr := client.SendMedia(ctx, dingtalk.SendMediaRequest{ChatType: req.ChatType, ChatID: strings.TrimSpace(req.ChatID), Kind: attachment.Kind, MediaID: mediaID, RobotCode: robotCode, MessageUUID: req.MessageUUID})
+		if sendErr != nil {
+			item.Error = sendErr.Error()
+			attachmentErrors = append(attachmentErrors, item.Error)
+			result.AttachmentResults = append(result.AttachmentResults, item)
+			continue
+		}
+		item.Status = sdk.AttachmentStatusSent
+		item.MessageID = resp.ProcessQueryKey
+		item.PlatformResourceID = mediaID
+		result.MessageID = firstString(resp.ProcessQueryKey, result.MessageID)
+		result.AttachmentResults = append(result.AttachmentResults, item)
+	}
+	if len(attachmentErrors) > 0 {
+		result.Raw["attachment_errors"] = attachmentErrors
+	}
+	if result.MessageID == "" {
+		return result, fmt.Errorf("%s outbound attachments failed", Platform)
+	}
+	return result, nil
 }
 
 func (c Connector) Acknowledge(ctx context.Context, runtime sdk.Runtime, req sdk.OutboundAck) (*sdk.AckResult, error) {
@@ -401,11 +435,27 @@ func (c Connector) processStreamEvent(ctx context.Context, runtime sdk.Runtime, 
 	}
 	text := event.Text()
 	chat := event.ChatIdentity()
+	mediaClient := clientFromAccount(runtime, account)
+	if state.AccessToken != "" && state.AccessTokenExpires.After(time.Now().UTC().Add(5*time.Minute)) {
+		mediaClient.AccessToken = state.AccessToken
+		mediaClient.AccessTokenExpiresAt = state.AccessTokenExpires
+	}
+	attachments, cleanupAttachments, attachmentErrors := downloadDingTalkAttachments(ctx, mediaClient, event)
+	if cleanupAttachments != nil {
+		defer cleanupAttachments()
+	}
+	if strings.TrimSpace(text) == "" && (len(attachments) > 0 || len(attachmentErrors) > 0) {
+		text = dingtalkAttachmentPlaceholder(attachments, attachmentErrors)
+	}
 	inbound := BuildInboundMessage(runtime.WorkspaceUUID, runtime.Channel.UUID, accountUUID, event, text)
+	inbound.Attachments = attachments
+	if len(attachmentErrors) > 0 {
+		inbound.Raw["attachment_errors"] = attachmentErrors
+	}
 	if chat.ChatType == "" || chat.ChatID == "" || chat.SenderID == "" {
 		return &EventResult{Type: "message", Ignored: true, Reason: "incomplete_or_non_text_message"}, nil
 	}
-	if strings.TrimSpace(text) == "" && !inbound.MentionedMe {
+	if strings.TrimSpace(text) == "" && !inbound.MentionedMe && len(attachments) == 0 && len(attachmentErrors) == 0 {
 		return &EventResult{Type: "message", Ignored: true, Reason: "incomplete_or_non_text_message"}, nil
 	}
 
@@ -441,6 +491,7 @@ func (c Connector) processStreamEvent(ctx context.Context, runtime sdk.Runtime, 
 		SenderID:      sdk.IMPersonParticipantID(Platform, chat.ChatType, chat.ChatID, chat.SenderID),
 		Content:       text,
 		DedupeKey:     key,
+		Attachments:   inbound.Attachments,
 		Metadata: map[string]any{
 			"source":                       Platform,
 			"platform":                     Platform,
@@ -577,6 +628,248 @@ func BuildInboundMessage(workspaceUUID, channelUUID, accountUUID string, event *
 			"chatbot_corp_id":            event.ChatbotCorpID,
 		},
 	}
+}
+
+type dingtalkInboundAttachmentSource struct {
+	kind         string
+	downloadCode string
+	pictureURL   string
+	contentType  string
+	fileName     string
+}
+
+func downloadDingTalkAttachments(ctx context.Context, client *dingtalk.Client, event *dingtalk.StreamEvent) ([]sdk.MediaAttachment, func(), []string) {
+	if event == nil {
+		return nil, nil, nil
+	}
+	sources, supported := dingtalkInboundAttachmentSources(event)
+	if !supported {
+		return nil, nil, nil
+	}
+	if client == nil {
+		return nil, nil, []string{"dingtalk media client is not configured"}
+	}
+	attachments := make([]sdk.MediaAttachment, 0, len(sources))
+	cleanups := make([]func(), 0, len(sources))
+	attachmentErrors := make([]string, 0)
+	cleanup := func() {
+		for index := len(cleanups) - 1; index >= 0; index-- {
+			cleanups[index]()
+		}
+	}
+	for index, source := range sources {
+		var path string
+		var remove func()
+		var err error
+		switch {
+		case source.downloadCode != "":
+			path, remove, err = client.DownloadMedia(
+				ctx,
+				source.downloadCode,
+				firstString(event.RobotCode, client.RobotCode),
+			)
+		case source.pictureURL != "":
+			path, remove, err = client.DownloadURL(ctx, source.pictureURL)
+		default:
+			err = fmt.Errorf("dingtalk media download code or picture URL is missing")
+		}
+		if err != nil {
+			attachmentErrors = append(attachmentErrors, err.Error())
+			continue
+		}
+		if remove != nil {
+			cleanups = append(cleanups, remove)
+		}
+		resourceID := source.downloadCode
+		attachmentID := resourceID
+		if attachmentID == "" {
+			attachmentID = fmt.Sprintf("%s:attachment:%d", event.MsgID, index)
+		}
+		attachments = append(attachments, sdk.MediaAttachment{
+			ID:                 attachmentID,
+			Kind:               source.kind,
+			Source:             sdk.MediaSourcePath,
+			Path:               path,
+			ContentType:        source.contentType,
+			FileName:           source.fileName,
+			PlatformResourceID: resourceID,
+			Raw: map[string]any{
+				"download_code": source.downloadCode,
+				"message_id":    event.MsgID,
+			},
+		})
+	}
+	if len(cleanups) == 0 {
+		cleanup = nil
+	}
+	return attachments, cleanup, attachmentErrors
+}
+
+func dingtalkInboundAttachmentSources(event *dingtalk.StreamEvent) ([]dingtalkInboundAttachmentSource, bool) {
+	if event == nil {
+		return nil, false
+	}
+	if strings.EqualFold(strings.TrimSpace(event.MsgType), "richText") {
+		items := dingtalkRichTextItems(event.Raw)
+		sources := make([]dingtalkInboundAttachmentSource, 0, len(items))
+		for _, item := range items {
+			content := mapValue(item)
+			if content == nil || content["skillData"] != nil {
+				continue
+			}
+			kind, mediaItem := dingtalkInboundMediaKind(firstString(content["type"], content["msgType"], content["msgtype"]))
+			downloadCode := dingtalkDownloadCode(content)
+			pictureURL := dingtalkPictureURL(content)
+			if downloadCode == "" && pictureURL == "" {
+				if mediaItem {
+					sources = append(sources, dingtalkInboundAttachmentSource{kind: kind})
+				}
+				continue
+			}
+			if !mediaItem {
+				if pictureURL != "" {
+					kind = sdk.MediaKindImage
+				} else {
+					kind = sdk.MediaKindFile
+				}
+			}
+			sources = append(sources, dingtalkInboundAttachmentSource{
+				kind:         kind,
+				downloadCode: downloadCode,
+				pictureURL:   pictureURL,
+				contentType:  firstString(content["contentType"], content["content_type"]),
+				fileName: firstString(
+					content["fileName"],
+					content["file_name"],
+					dingtalkPictureURLFileName(pictureURL),
+				),
+			})
+		}
+		return sources, true
+	}
+
+	kind, supported := dingtalkInboundMediaKind(event.MsgType)
+	if !supported {
+		return nil, false
+	}
+	content := mapValue(event.Raw["content"])
+	if content == nil {
+		content = mapValue(event.Raw[event.MsgType])
+	}
+	return []dingtalkInboundAttachmentSource{{
+		kind: kind,
+		downloadCode: firstString(
+			dingtalkDownloadCode(content),
+			event.Raw["downloadCode"],
+			event.Raw["download_code"],
+		),
+		pictureURL: firstString(dingtalkPictureURL(content), dingtalkPictureURL(event.Raw)),
+		contentType: firstString(
+			mapString(content, "contentType"),
+			mapString(content, "content_type"),
+		),
+		fileName: firstString(mapString(content, "fileName"), mapString(content, "file_name")),
+	}}, true
+}
+
+func dingtalkRichTextItems(raw map[string]any) []any {
+	if raw == nil {
+		return nil
+	}
+	if richText := mapValue(raw["richText"]); richText != nil {
+		if items, ok := richText["richTextList"].([]any); ok {
+			return items
+		}
+	}
+	if content := mapValue(raw["content"]); content != nil {
+		if items, ok := content["richText"].([]any); ok {
+			return items
+		}
+		if richText := mapValue(content["richText"]); richText != nil {
+			if items, ok := richText["richTextList"].([]any); ok {
+				return items
+			}
+		}
+		if items, ok := content["richTextList"].([]any); ok {
+			return items
+		}
+	}
+	return nil
+}
+
+func dingtalkDownloadCode(content map[string]any) string {
+	return firstString(
+		mapString(content, "downloadCode"),
+		mapString(content, "download_code"),
+		mapString(content, "mediaId"),
+		mapString(content, "media_id"),
+	)
+}
+
+func dingtalkPictureURL(content map[string]any) string {
+	return firstString(
+		mapString(content, "pictureUrl"),
+		mapString(content, "pictureURL"),
+		mapString(content, "picture_url"),
+	)
+}
+
+func dingtalkPictureURLFileName(rawURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return ""
+	}
+	path := strings.Trim(strings.TrimSpace(parsed.EscapedPath()), "/")
+	if path == "" {
+		return ""
+	}
+	parts := strings.Split(path, "/")
+	name, err := url.PathUnescape(parts[len(parts)-1])
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(name)
+}
+
+func dingtalkInboundMediaKind(messageType string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(messageType)) {
+	case "picture", "image":
+		return sdk.MediaKindImage, true
+	case "audio", "voice":
+		return sdk.MediaKindAudio, true
+	case "video":
+		return sdk.MediaKindVideo, true
+	case "sticker":
+		return sdk.MediaKindSticker, true
+	case "file":
+		return sdk.MediaKindFile, true
+	default:
+		return "", false
+	}
+}
+
+func dingtalkAttachmentPlaceholder(attachments []sdk.MediaAttachment, errors []string) string {
+	labels := make([]string, 0, len(attachments)+len(errors))
+	for _, attachment := range attachments {
+		label := "附件"
+		switch attachment.Kind {
+		case sdk.MediaKindImage:
+			label = "图片"
+		case sdk.MediaKindAudio:
+			label = "音频"
+		case sdk.MediaKindVideo:
+			label = "视频"
+		case sdk.MediaKindFile:
+			label = "文件"
+		case sdk.MediaKindSticker:
+			label = "贴纸"
+		}
+		labels = append(labels, "["+label+"]")
+	}
+	for range errors {
+		labels = append(labels, "[附件下载失败]")
+	}
+	return strings.Join(labels, " ")
 }
 
 func dingtalkReferencedMessage(event *dingtalk.StreamEvent) *sdk.ReferencedMessage {

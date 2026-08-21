@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -77,6 +78,99 @@ func TestClientTokenAndSendGroupText(t *testing.T) {
 	}
 	if resp.ProcessQueryKey != "pqk-1" {
 		t.Fatalf("resp=%+v", resp)
+	}
+}
+
+func TestClientUploadMediaUsesDeclaredFilename(t *testing.T) {
+	path := t.TempDir() + "/temporary-upload"
+	if err := os.WriteFile(path, []byte("media"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client := NewClient("https://api.dingtalk.test", "client-1", "secret-1", "robot-1")
+	client.AccessToken = "token-1"
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/v1.0/robot/messageFiles/upload" {
+			t.Fatalf("unexpected request: %s", r.URL.Path)
+		}
+		if err := r.ParseMultipartForm(1024 * 1024); err != nil {
+			t.Fatal(err)
+		}
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = file.Close()
+		if header.Filename != "report.pdf" {
+			t.Fatalf("uploaded filename=%q", header.Filename)
+		}
+		return jsonResponse(map[string]any{"downloadCode": "download-1"})
+	})}
+
+	code, err := client.UploadMedia(context.Background(), path, "file", "robot-1", "report.pdf")
+	if err != nil || code != "download-1" {
+		t.Fatalf("download code=%q error=%v", code, err)
+	}
+}
+
+func TestClientDownloadURLWritesTemporaryFile(t *testing.T) {
+	client := NewClient("https://api.dingtalk.test", "client-1", "secret-1", "robot-1")
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.String() != "https://media.dingtalk.test/image.png" {
+			t.Fatalf("download URL = %s", request.URL.String())
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("image-data")),
+			Header:     make(http.Header),
+			Request:    request,
+		}, nil
+	})}
+
+	path, cleanup, err := client.DownloadURL(t.Context(), "https://media.dingtalk.test/image.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleanup == nil {
+		t.Fatal("cleanup is nil")
+	}
+	body, err := os.ReadFile(path)
+	if err != nil || string(body) != "image-data" {
+		t.Fatalf("downloaded body = %q error=%v", body, err)
+	}
+	cleanup()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("temporary file still exists: %v", err)
+	}
+}
+
+func TestClientDownloadURLRejectsUnsafeURLsAndRedirects(t *testing.T) {
+	client := NewClient("https://api.dingtalk.test", "client-1", "secret-1", "robot-1")
+	requestCount := 0
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requestCount++
+		return &http.Response{
+			StatusCode: http.StatusFound,
+			Body:       io.NopCloser(strings.NewReader("")),
+			Header: http.Header{
+				"Location": []string{"https://127.0.0.1/private"},
+			},
+			Request: request,
+		}, nil
+	})}
+
+	if _, _, err := client.DownloadURL(t.Context(), "http://media.dingtalk.test/image.png"); err == nil ||
+		!strings.Contains(err.Error(), "invalid") {
+		t.Fatalf("HTTP URL error = %v", err)
+	}
+	if requestCount != 0 {
+		t.Fatalf("unsafe initial URL sent %d requests", requestCount)
+	}
+	if _, _, err := client.DownloadURL(t.Context(), "https://media.dingtalk.test/image.png"); err == nil ||
+		!strings.Contains(err.Error(), "host is not allowed") {
+		t.Fatalf("private redirect error = %v", err)
+	}
+	if requestCount != 1 {
+		t.Fatalf("redirect test sent %d requests, want 1", requestCount)
 	}
 }
 

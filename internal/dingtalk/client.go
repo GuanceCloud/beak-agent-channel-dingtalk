@@ -7,14 +7,30 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
 	neturl "net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
 const defaultRequestTimeout = 15 * time.Second
+const maxMediaBytes int64 = 32 << 20
+
+func blockedMediaHost(host string) bool {
+	host = strings.Trim(strings.ToLower(strings.TrimSpace(host)), "[]")
+	if host == "" || host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+}
 
 type Client struct {
 	BaseURL              string
@@ -177,6 +193,210 @@ func (c *Client) SendMarkdown(ctx context.Context, req SendMarkdownRequest) (*Se
 		return nil, fmt.Errorf("send markdown failed: code=%s message=%s", resp.Code, resp.Message)
 	}
 	return &resp, nil
+}
+
+func (c *Client) SendMedia(ctx context.Context, req SendMediaRequest) (*SendTextResponse, error) {
+	if strings.TrimSpace(req.ChatID) == "" {
+		return nil, fmt.Errorf("chat_id is required")
+	}
+	if strings.TrimSpace(req.MediaID) == "" {
+		return nil, fmt.Errorf("media_id is required")
+	}
+	token := strings.TrimSpace(c.AccessToken)
+	if token == "" {
+		var err error
+		token, err = c.Token(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+	robotCode := strings.TrimSpace(req.RobotCode)
+	if robotCode == "" {
+		robotCode = strings.TrimSpace(c.RobotCode)
+	}
+	msgKey := "sampleFileMsg"
+	msgParam := map[string]string{"mediaId": req.MediaID}
+	switch strings.TrimSpace(req.Kind) {
+	case "image", "sticker":
+		msgKey = "sampleImageMsg"
+		msgParam = map[string]string{"photoURL": req.MediaID}
+	case "audio":
+		msgKey = "sampleAudioMsg"
+	case "video":
+		msgKey = "sampleVideoMsg"
+	}
+	encoded, err := json.Marshal(msgParam)
+	if err != nil {
+		return nil, err
+	}
+	body := map[string]any{"robotCode": robotCode, "msgKey": msgKey, "msgParam": string(encoded)}
+	path := "/v1.0/robot/oToMessages/batchSend"
+	if req.ChatType == ChatTypeGroup {
+		path = "/v1.0/robot/groupMessages/send"
+		body["openConversationId"] = req.ChatID
+	} else {
+		body["userIds"] = []string{req.ChatID}
+	}
+	var resp SendTextResponse
+	if err := c.doJSON(ctx, http.MethodPost, path, body, &resp, withAccessToken(token)); err != nil {
+		return nil, err
+	}
+	if resp.Code != "" {
+		return nil, fmt.Errorf("send media failed: code=%s message=%s", resp.Code, resp.Message)
+	}
+	return &resp, nil
+}
+
+func (c *Client) UploadMedia(ctx context.Context, path, kind, robotCode, fileName string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() || info.Size() > maxMediaBytes {
+		return "", fmt.Errorf("dingtalk media exceeds %d bytes or is not a regular file", maxMediaBytes)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	token := strings.TrimSpace(c.AccessToken)
+	if token == "" {
+		token, err = c.Token(ctx)
+		if err != nil {
+			return "", err
+		}
+	}
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("robotCode", strings.TrimSpace(robotCode)); err != nil {
+		return "", err
+	}
+	if err := writer.WriteField("type", strings.TrimSpace(kind)); err != nil {
+		return "", err
+	}
+	uploadName := strings.TrimSpace(fileName)
+	if uploadName == "" {
+		uploadName = path
+	}
+	part, err := writer.CreateFormFile("file", filepath.Base(uploadName))
+	if err != nil {
+		return "", err
+	}
+	if _, err := io.Copy(part, io.LimitReader(file, maxMediaBytes+1)); err != nil {
+		return "", err
+	}
+	if err := writer.Close(); err != nil {
+		return "", err
+	}
+	var resp MediaUploadResponse
+	if err := c.doMultipart(ctx, "/v1.0/robot/messageFiles/upload", &body, writer.FormDataContentType(), &resp, withAccessToken(token)); err != nil {
+		return "", err
+	}
+	if resp.DownloadCode == "" {
+		return "", fmt.Errorf("dingtalk media upload failed: code=%s message=%s", resp.Code, resp.Message)
+	}
+	return resp.DownloadCode, nil
+}
+
+func (c *Client) DownloadMedia(ctx context.Context, downloadCode, robotCode string) (string, func(), error) {
+	if strings.TrimSpace(downloadCode) == "" {
+		return "", nil, fmt.Errorf("download_code is required")
+	}
+	token := strings.TrimSpace(c.AccessToken)
+	if token == "" {
+		var err error
+		token, err = c.Token(ctx)
+		if err != nil {
+			return "", nil, err
+		}
+	}
+	var info MediaDownloadResponse
+	if err := c.doJSON(ctx, http.MethodPost, "/v1.0/robot/messageFiles/download", map[string]any{"downloadCode": downloadCode, "robotCode": robotCode}, &info, withAccessToken(token)); err != nil {
+		return "", nil, err
+	}
+	return c.DownloadURL(ctx, info.DownloadURL)
+}
+
+// DownloadURL materializes a DingTalk-provided media URL into a temporary file.
+// The URL and every redirect are validated before a request is sent so inbound
+// pictureUrl values cannot be used to reach local or private HTTP endpoints.
+func (c *Client) DownloadURL(ctx context.Context, rawURL string) (string, func(), error) {
+	parsed, err := validateMediaDownloadURL(rawURL)
+	if err != nil {
+		return "", nil, err
+	}
+	timeout := c.RequestTimeout
+	if timeout <= 0 {
+		timeout = defaultRequestTimeout
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(requestCtx, http.MethodGet, parsed.String(), nil)
+	if err != nil {
+		return "", nil, err
+	}
+	baseClient := c.HTTPClient
+	if baseClient == nil {
+		baseClient = http.DefaultClient
+	}
+	client := *baseClient
+	originalCheckRedirect := client.CheckRedirect
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if _, err := validateMediaDownloadURL(req.URL.String()); err != nil {
+			return err
+		}
+		if originalCheckRedirect != nil {
+			return originalCheckRedirect(req, via)
+		}
+		if len(via) >= 10 {
+			return fmt.Errorf("dingtalk media download stopped after 10 redirects")
+		}
+		return nil
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return "", nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return "", nil, fmt.Errorf("dingtalk media download failed: status=%d", response.StatusCode)
+	}
+	tmp, err := os.CreateTemp("", "beak-dingtalk-media-*")
+	if err != nil {
+		return "", nil, err
+	}
+	path := tmp.Name()
+	cleanup := func() { _ = os.Remove(path) }
+	if _, err := io.Copy(tmp, io.LimitReader(response.Body, maxMediaBytes+1)); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return "", nil, err
+	}
+	if info, statErr := tmp.Stat(); statErr != nil || info.Size() > maxMediaBytes {
+		_ = tmp.Close()
+		cleanup()
+		if statErr != nil {
+			return "", nil, statErr
+		}
+		return "", nil, fmt.Errorf("dingtalk media exceeds %d bytes", maxMediaBytes)
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	return path, cleanup, nil
+}
+
+func validateMediaDownloadURL(rawURL string) (*neturl.URL, error) {
+	parsed, err := neturl.Parse(strings.TrimSpace(rawURL))
+	if err != nil || parsed.Host == "" || parsed.Scheme != "https" || parsed.User != nil {
+		return nil, fmt.Errorf("dingtalk media download URL is invalid")
+	}
+	if blockedMediaHost(parsed.Hostname()) {
+		return nil, fmt.Errorf("dingtalk media download URL host is not allowed")
+	}
+	return parsed, nil
 }
 
 func (c *Client) SendWebhookText(ctx context.Context, sessionWebhook string, text string) (*WebhookSendResponse, error) {
@@ -460,6 +680,47 @@ func (c *Client) doJSONURL(ctx context.Context, method, targetURL string, body a
 		_ = json.Unmarshal(data, &response.Raw)
 	case *WebhookSendResponse:
 		_ = json.Unmarshal(data, &response.Raw)
+	}
+	return nil
+}
+
+func (c *Client) doMultipart(ctx context.Context, path string, body io.Reader, contentType string, out any, opts ...requestOption) error {
+	timeout := c.RequestTimeout
+	if timeout <= 0 {
+		timeout = defaultRequestTimeout
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, c.url(path), body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("User-Agent", "BeakAgentDingTalk/0.1.0")
+	for _, opt := range opts {
+		opt(req)
+	}
+	client := c.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxMediaBytes))
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return &HTTPError{StatusCode: resp.StatusCode, Method: http.MethodPost, Target: sanitizeURLForError(req.URL.String()), Body: string(data)}
+	}
+	if out != nil && len(bytes.TrimSpace(data)) > 0 {
+		if err := json.Unmarshal(data, out); err != nil {
+			return transientFailure(fmt.Sprintf("decode response: %v", err))
+		}
 	}
 	return nil
 }

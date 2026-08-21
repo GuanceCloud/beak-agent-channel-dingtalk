@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -34,7 +35,7 @@ func TestDingTalkConnectorMetadataAndSchema(t *testing.T) {
 	if metadata.ID != ID || metadata.Platform != Platform || metadata.Label != "DingTalk" {
 		t.Fatalf("metadata=%+v", metadata)
 	}
-	if !metadata.Capabilities.Text || !metadata.Capabilities.DirectChat || !metadata.Capabilities.GroupChat || metadata.Capabilities.Media {
+	if !metadata.Capabilities.Text || !metadata.Capabilities.DirectChat || !metadata.Capabilities.GroupChat || !metadata.Capabilities.Media {
 		t.Fatalf("capabilities=%+v", metadata.Capabilities)
 	}
 	if !metadata.Capabilities.Stream || metadata.Capabilities.Webhook {
@@ -91,6 +92,109 @@ func TestDingTalkConnectorAcknowledgeUnsupported(t *testing.T) {
 	}
 	if result.Status != "unsupported" || result.Mode != "unsupported" || result.AccountUUID != "account-1" {
 		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestDingTalkInboundMediaKindSupportsFiles(t *testing.T) {
+	kind, ok := dingtalkInboundMediaKind("file")
+	if !ok || kind != sdk.MediaKindFile {
+		t.Fatalf("file media kind = %q/%t, want %q/true", kind, ok, sdk.MediaKindFile)
+	}
+	if _, ok := dingtalkInboundMediaKind("text"); ok {
+		t.Fatal("text message must not be treated as an attachment")
+	}
+}
+
+func TestDownloadDingTalkAttachmentsSupportsRichTextPictureURLAndDownloadCode(t *testing.T) {
+	client := dingtalk.NewClient("https://api.dingtalk.test", "client-1", "secret-1", "robot-1")
+	client.AccessToken = "token-1"
+	client.HTTPClient = &http.Client{Transport: testRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.String() {
+		case "https://api.dingtalk.test/v1.0/robot/messageFiles/download":
+			if request.Header.Get("x-acs-dingtalk-access-token") != "token-1" {
+				t.Fatalf("download token header = %q", request.Header.Get("x-acs-dingtalk-access-token"))
+			}
+			return testJSONResponse(map[string]any{"downloadUrl": "https://media.dingtalk.test/report.pdf"})
+		case "https://media.dingtalk.test/image.png":
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("image-data")),
+				Header:     make(http.Header),
+				Request:    request,
+			}, nil
+		case "https://media.dingtalk.test/report.pdf":
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("report-data")),
+				Header:     make(http.Header),
+				Request:    request,
+			}, nil
+		default:
+			t.Fatalf("download URL = %s", request.URL.String())
+			return nil, nil
+		}
+	})}
+	event := &dingtalk.StreamEvent{
+		MsgID:   "message-1",
+		MsgType: "richText",
+		Raw: map[string]any{
+			"richText": map[string]any{
+				"richTextList": []any{
+					map[string]any{"text": "请查看"},
+					map[string]any{
+						"pictureUrl":  "https://media.dingtalk.test/image.png",
+						"fileName":    "inline.png",
+						"contentType": "image/png",
+					},
+					map[string]any{
+						"msgType":      "file",
+						"downloadCode": "download-report",
+						"fileName":     "report.pdf",
+						"contentType":  "application/pdf",
+					},
+				},
+			},
+		},
+	}
+
+	attachments, cleanup, attachmentErrors := downloadDingTalkAttachments(t.Context(), client, event)
+	if cleanup == nil {
+		t.Fatal("cleanup is nil")
+	}
+	defer cleanup()
+	if len(attachmentErrors) != 0 {
+		t.Fatalf("attachment errors = %#v", attachmentErrors)
+	}
+	if len(attachments) != 2 {
+		t.Fatalf("attachments = %#v", attachments)
+	}
+	attachment := attachments[0]
+	if attachment.Kind != sdk.MediaKindImage || attachment.FileName != "inline.png" ||
+		attachment.ContentType != "image/png" || attachment.PlatformResourceID != "" {
+		t.Fatalf("attachment = %#v", attachment)
+	}
+	body, err := os.ReadFile(attachment.Path)
+	if err != nil || string(body) != "image-data" {
+		t.Fatalf("downloaded body = %q error=%v", body, err)
+	}
+	fileAttachment := attachments[1]
+	if fileAttachment.Kind != sdk.MediaKindFile || fileAttachment.FileName != "report.pdf" ||
+		fileAttachment.PlatformResourceID != "download-report" {
+		t.Fatalf("file attachment = %#v", fileAttachment)
+	}
+	fileBody, err := os.ReadFile(fileAttachment.Path)
+	if err != nil || string(fileBody) != "report-data" {
+		t.Fatalf("downloaded file body = %q error=%v", fileBody, err)
+	}
+	path := attachment.Path
+	filePath := fileAttachment.Path
+	cleanup()
+	cleanup = func() {}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("temporary attachment still exists: %v", err)
+	}
+	if _, err := os.Stat(filePath); !os.IsNotExist(err) {
+		t.Fatalf("temporary file attachment still exists: %v", err)
 	}
 }
 
