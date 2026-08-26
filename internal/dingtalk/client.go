@@ -20,6 +20,20 @@ import (
 const defaultRequestTimeout = 15 * time.Second
 const maxMediaBytes int64 = 32 << 20
 
+func blockedMediaIP(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	if ipv4 := ip.To4(); ipv4 != nil {
+		ip = ipv4
+		// Go's IsPrivate does not classify the shared address space as private.
+		if ip[0] == 100 && ip[1]&0xc0 == 0x40 {
+			return true
+		}
+	}
+	return !ip.IsGlobalUnicast() || ip.IsPrivate()
+}
+
 func blockedMediaHost(host string) bool {
 	host = strings.Trim(strings.ToLower(strings.TrimSpace(host)), "[]")
 	if host == "" || host == "localhost" || strings.HasSuffix(host, ".localhost") {
@@ -29,7 +43,91 @@ func blockedMediaHost(host string) bool {
 	if ip == nil {
 		return false
 	}
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+	return blockedMediaIP(ip)
+}
+
+type mediaNetworkDialer struct {
+	lookupIP    func(context.Context, string) ([]net.IPAddr, error)
+	dialContext func(context.Context, string, string) (net.Conn, error)
+}
+
+func (d mediaNetworkDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, fmt.Errorf("dingtalk media download network address is invalid")
+	}
+	addresses := []net.IPAddr(nil)
+	if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil {
+		addresses = []net.IPAddr{{IP: ip}}
+	} else {
+		if d.lookupIP == nil {
+			return nil, fmt.Errorf("dingtalk media download URL host resolver is not configured")
+		}
+		addresses, err = d.lookupIP(ctx, host)
+		if err != nil || len(addresses) == 0 {
+			return nil, fmt.Errorf("dingtalk media download URL host could not be resolved")
+		}
+	}
+	for _, candidate := range addresses {
+		if blockedMediaIP(candidate.IP) {
+			return nil, fmt.Errorf("dingtalk media download URL host is not allowed")
+		}
+	}
+	if d.dialContext == nil {
+		return nil, fmt.Errorf("dingtalk media download network dialer is not configured")
+	}
+	var lastErr error
+	for _, candidate := range addresses {
+		ip := candidate.IP
+		if network == "tcp4" && ip.To4() == nil {
+			continue
+		}
+		if network == "tcp6" && ip.To4() != nil {
+			continue
+		}
+		connection, dialErr := d.dialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+		if dialErr == nil {
+			return connection, nil
+		}
+		lastErr = dialErr
+	}
+	if lastErr == nil {
+		return nil, fmt.Errorf("dingtalk media download URL host has no compatible address")
+	}
+	return nil, lastErr
+}
+
+func mediaDownloadHTTPClient(base *http.Client, timeout time.Duration) *http.Client {
+	if base == nil {
+		base = http.DefaultClient
+	}
+	client := *base
+	var transport *http.Transport
+	switch baseTransport := base.Transport.(type) {
+	case nil:
+		defaultTransport, ok := http.DefaultTransport.(*http.Transport)
+		if !ok {
+			return &client
+		}
+		transport = defaultTransport.Clone()
+	case *http.Transport:
+		transport = baseTransport.Clone()
+	default:
+		// A caller-provided RoundTripper owns its network policy. Structural URL
+		// and redirect validation still run before it receives a request.
+		return &client
+	}
+	networkDialer := &net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second}
+	mediaDialer := mediaNetworkDialer{
+		lookupIP:    net.DefaultResolver.LookupIPAddr,
+		dialContext: networkDialer.DialContext,
+	}
+	transport.Proxy = nil
+	transport.DialContext = mediaDialer.DialContext
+	transport.DialTLSContext = nil
+	transport.DisableKeepAlives = true
+	client.Transport = transport
+	return &client
 }
 
 type Client struct {
@@ -336,11 +434,7 @@ func (c *Client) DownloadURL(ctx context.Context, rawURL string) (string, func()
 	if err != nil {
 		return "", nil, err
 	}
-	baseClient := c.HTTPClient
-	if baseClient == nil {
-		baseClient = http.DefaultClient
-	}
-	client := *baseClient
+	client := mediaDownloadHTTPClient(c.HTTPClient, timeout)
 	originalCheckRedirect := client.CheckRedirect
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if _, err := validateMediaDownloadURL(req.URL.String()); err != nil {
@@ -356,7 +450,15 @@ func (c *Client) DownloadURL(ctx context.Context, rawURL string) (string, func()
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return "", nil, err
+		target := sanitizeURLForError(parsed.String())
+		if isTimeoutError(err) {
+			return "", nil, &transportError{message: fmt.Sprintf("GET %s timed out while downloading DingTalk media", target), cause: context.DeadlineExceeded}
+		}
+		var urlErr *neturl.Error
+		if errors.As(err, &urlErr) {
+			return "", nil, &transportError{message: fmt.Sprintf("GET %s failed: %v", target, urlErr.Err), cause: urlErr.Err}
+		}
+		return "", nil, &transportError{message: fmt.Sprintf("GET %s failed", target), cause: err}
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -389,9 +491,20 @@ func (c *Client) DownloadURL(ctx context.Context, rawURL string) (string, func()
 }
 
 func validateMediaDownloadURL(rawURL string) (*neturl.URL, error) {
-	parsed, err := neturl.Parse(strings.TrimSpace(rawURL))
-	if err != nil || parsed.Host == "" || parsed.Scheme != "https" || parsed.User != nil {
+	rawURL = strings.TrimSpace(rawURL)
+	if strings.HasPrefix(rawURL, "//") {
+		rawURL = "https:" + rawURL
+	}
+	parsed, err := neturl.Parse(rawURL)
+	if err != nil || parsed.Host == "" || parsed.Hostname() == "" || parsed.Opaque != "" || parsed.User != nil {
 		return nil, fmt.Errorf("dingtalk media download URL is invalid")
+	}
+	parsed.Scheme = strings.ToLower(strings.TrimSpace(parsed.Scheme))
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return nil, fmt.Errorf("dingtalk media download URL scheme is not allowed")
+	}
+	if port := parsed.Port(); port != "" && !((parsed.Scheme == "http" && port == "80") || (parsed.Scheme == "https" && port == "443")) {
+		return nil, fmt.Errorf("dingtalk media download URL port is not allowed")
 	}
 	if blockedMediaHost(parsed.Hostname()) {
 		return nil, fmt.Errorf("dingtalk media download URL host is not allowed")

@@ -674,7 +674,13 @@ func downloadDingTalkAttachments(ctx context.Context, client *dingtalk.Client, e
 			err = fmt.Errorf("dingtalk media download code or picture URL is missing")
 		}
 		if err != nil {
-			attachmentErrors = append(attachmentErrors, err.Error())
+			sourceName := "missing"
+			if source.downloadCode != "" {
+				sourceName = "download_code"
+			} else if source.pictureURL != "" {
+				sourceName = "picture_url"
+			}
+			attachmentErrors = append(attachmentErrors, fmt.Sprintf("dingtalk attachment download failed (source=%s): %v", sourceName, err))
 			continue
 		}
 		if remove != nil {

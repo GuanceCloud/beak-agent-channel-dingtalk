@@ -114,15 +114,15 @@ func TestDownloadDingTalkAttachmentsSupportsRichTextPictureURLAndDownloadCode(t 
 			if request.Header.Get("x-acs-dingtalk-access-token") != "token-1" {
 				t.Fatalf("download token header = %q", request.Header.Get("x-acs-dingtalk-access-token"))
 			}
-			return testJSONResponse(map[string]any{"downloadUrl": "https://media.dingtalk.test/report.pdf"})
-		case "https://media.dingtalk.test/image.png":
+			return testJSONResponse(map[string]any{"downloadUrl": "http://media.dingtalk.test/report.pdf"})
+		case "http://media.dingtalk.test/image.png":
 			return &http.Response{
 				StatusCode: http.StatusOK,
 				Body:       io.NopCloser(strings.NewReader("image-data")),
 				Header:     make(http.Header),
 				Request:    request,
 			}, nil
-		case "https://media.dingtalk.test/report.pdf":
+		case "http://media.dingtalk.test/report.pdf":
 			return &http.Response{
 				StatusCode: http.StatusOK,
 				Body:       io.NopCloser(strings.NewReader("report-data")),
@@ -142,7 +142,7 @@ func TestDownloadDingTalkAttachmentsSupportsRichTextPictureURLAndDownloadCode(t 
 				"richTextList": []any{
 					map[string]any{"text": "请查看"},
 					map[string]any{
-						"pictureUrl":  "https://media.dingtalk.test/image.png",
+						"pictureUrl":  "http://media.dingtalk.test/image.png",
 						"fileName":    "inline.png",
 						"contentType": "image/png",
 					},
@@ -195,6 +195,32 @@ func TestDownloadDingTalkAttachmentsSupportsRichTextPictureURLAndDownloadCode(t 
 	}
 	if _, err := os.Stat(filePath); !os.IsNotExist(err) {
 		t.Fatalf("temporary file attachment still exists: %v", err)
+	}
+}
+
+func TestDownloadDingTalkAttachmentsReportsSafeSourceDiagnostic(t *testing.T) {
+	client := dingtalk.NewClient("https://api.dingtalk.test", "client-1", "secret-1", "robot-1")
+	event := &dingtalk.StreamEvent{
+		MsgID:   "message-1",
+		MsgType: "richText",
+		Raw: map[string]any{
+			"content": map[string]any{
+				"richText": []any{
+					map[string]any{"pictureUrl": "ftp://media.dingtalk.test/image.png?signature=secret"},
+				},
+			},
+		},
+	}
+
+	attachments, cleanup, attachmentErrors := downloadDingTalkAttachments(t.Context(), client, event)
+	if len(attachments) != 0 || cleanup != nil {
+		t.Fatalf("attachments=%#v cleanup=%v", attachments, cleanup != nil)
+	}
+	if len(attachmentErrors) != 1 || !strings.Contains(attachmentErrors[0], "source=picture_url") {
+		t.Fatalf("attachment errors = %#v", attachmentErrors)
+	}
+	if strings.Contains(attachmentErrors[0], "signature") || strings.Contains(attachmentErrors[0], "secret") {
+		t.Fatalf("attachment error leaks signed URL: %q", attachmentErrors[0])
 	}
 }
 
