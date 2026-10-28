@@ -106,6 +106,8 @@ func TestDingTalkInboundMediaKindSupportsFiles(t *testing.T) {
 }
 
 func TestDownloadDingTalkAttachmentsSupportsRichTextPictureURLAndDownloadCode(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	client := dingtalk.NewClient("https://api.dingtalk.test", "client-1", "secret-1", "robot-1")
 	client.AccessToken = "token-1"
 	client.HTTPClient = &http.Client{Transport: testRoundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -157,7 +159,7 @@ func TestDownloadDingTalkAttachmentsSupportsRichTextPictureURLAndDownloadCode(t 
 		},
 	}
 
-	attachments, cleanup, attachmentErrors := downloadDingTalkAttachments(t.Context(), client, event)
+	attachments, cleanup, attachmentErrors := downloadDingTalkAttachments(ctx, client, event)
 	if cleanup == nil {
 		t.Fatal("cleanup is nil")
 	}
@@ -199,6 +201,8 @@ func TestDownloadDingTalkAttachmentsSupportsRichTextPictureURLAndDownloadCode(t 
 }
 
 func TestDownloadDingTalkAttachmentsReportsSafeSourceDiagnostic(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	client := dingtalk.NewClient("https://api.dingtalk.test", "client-1", "secret-1", "robot-1")
 	event := &dingtalk.StreamEvent{
 		MsgID:   "message-1",
@@ -212,7 +216,7 @@ func TestDownloadDingTalkAttachmentsReportsSafeSourceDiagnostic(t *testing.T) {
 		},
 	}
 
-	attachments, cleanup, attachmentErrors := downloadDingTalkAttachments(t.Context(), client, event)
+	attachments, cleanup, attachmentErrors := downloadDingTalkAttachments(ctx, client, event)
 	if len(attachments) != 0 || cleanup != nil {
 		t.Fatalf("attachments=%#v cleanup=%v", attachments, cleanup != nil)
 	}

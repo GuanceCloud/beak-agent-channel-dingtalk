@@ -115,6 +115,8 @@ func TestClientUploadMediaUsesDeclaredFilename(t *testing.T) {
 }
 
 func TestClientDownloadURLWritesTemporaryFile(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	client := NewClient("https://api.dingtalk.test", "client-1", "secret-1", "robot-1")
 	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.URL.String() != "http://media.dingtalk.test/image.png" {
@@ -128,7 +130,7 @@ func TestClientDownloadURLWritesTemporaryFile(t *testing.T) {
 		}, nil
 	})}
 
-	path, cleanup, err := client.DownloadURL(t.Context(), "http://media.dingtalk.test/image.png")
+	path, cleanup, err := client.DownloadURL(ctx, "http://media.dingtalk.test/image.png")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,6 +148,8 @@ func TestClientDownloadURLWritesTemporaryFile(t *testing.T) {
 }
 
 func TestClientDownloadURLRejectsUnsafeURLsAndRedirects(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	client := NewClient("https://api.dingtalk.test", "client-1", "secret-1", "robot-1")
 	requestCount := 0
 	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -160,18 +164,18 @@ func TestClientDownloadURLRejectsUnsafeURLsAndRedirects(t *testing.T) {
 		}, nil
 	})}
 
-	if _, _, err := client.DownloadURL(t.Context(), "ftp://media.dingtalk.test/image.png"); err == nil ||
+	if _, _, err := client.DownloadURL(ctx, "ftp://media.dingtalk.test/image.png"); err == nil ||
 		!strings.Contains(err.Error(), "scheme is not allowed") {
 		t.Fatalf("FTP URL error = %v", err)
 	}
-	if _, _, err := client.DownloadURL(t.Context(), "http://127.0.0.1/image.png"); err == nil ||
+	if _, _, err := client.DownloadURL(ctx, "http://127.0.0.1/image.png"); err == nil ||
 		!strings.Contains(err.Error(), "host is not allowed") {
 		t.Fatalf("loopback URL error = %v", err)
 	}
 	if requestCount != 0 {
 		t.Fatalf("unsafe initial URL sent %d requests", requestCount)
 	}
-	if _, _, err := client.DownloadURL(t.Context(), "https://media.dingtalk.test/image.png"); err == nil ||
+	if _, _, err := client.DownloadURL(ctx, "https://media.dingtalk.test/image.png"); err == nil ||
 		!strings.Contains(err.Error(), "host is not allowed") {
 		t.Fatalf("private redirect error = %v", err)
 	}
@@ -181,11 +185,13 @@ func TestClientDownloadURLRejectsUnsafeURLsAndRedirects(t *testing.T) {
 }
 
 func TestClientDownloadURLRedactsSignedQueryFromTransportError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	client := NewClient("https://api.dingtalk.test", "client-1", "secret-1", "robot-1")
 	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		return nil, errors.New("network unavailable")
 	})}
-	_, _, err := client.DownloadURL(t.Context(), "http://media.dingtalk.test/image.png?signature=secret-token")
+	_, _, err := client.DownloadURL(ctx, "http://media.dingtalk.test/image.png?signature=secret-token")
 	if err == nil {
 		t.Fatal("DownloadURL() error=nil")
 	}
@@ -212,6 +218,8 @@ func TestValidateMediaDownloadURLNormalizesProtocolRelativeURL(t *testing.T) {
 }
 
 func TestMediaNetworkDialerRejectsPrivateDNSAddress(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	dialCalls := 0
 	dialer := mediaNetworkDialer{
 		lookupIP: func(context.Context, string) ([]net.IPAddr, error) {
@@ -222,7 +230,7 @@ func TestMediaNetworkDialerRejectsPrivateDNSAddress(t *testing.T) {
 			return nil, nil
 		},
 	}
-	if _, err := dialer.DialContext(t.Context(), "tcp", "media.dingtalk.test:80"); err == nil ||
+	if _, err := dialer.DialContext(ctx, "tcp", "media.dingtalk.test:80"); err == nil ||
 		!strings.Contains(err.Error(), "host is not allowed") {
 		t.Fatalf("private DNS address error = %v", err)
 	}
@@ -232,6 +240,8 @@ func TestMediaNetworkDialerRejectsPrivateDNSAddress(t *testing.T) {
 }
 
 func TestMediaNetworkDialerPinsPublicDNSAddress(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	clientConnection, serverConnection := net.Pipe()
 	defer serverConnection.Close()
 	var dialAddress string
@@ -247,7 +257,7 @@ func TestMediaNetworkDialerPinsPublicDNSAddress(t *testing.T) {
 			return clientConnection, nil
 		},
 	}
-	connection, err := dialer.DialContext(t.Context(), "tcp", "media.dingtalk.test:80")
+	connection, err := dialer.DialContext(ctx, "tcp", "media.dingtalk.test:80")
 	if err != nil {
 		t.Fatal(err)
 	}

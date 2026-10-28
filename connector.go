@@ -64,6 +64,7 @@ func (c Connector) Metadata() sdk.ConnectorMetadata {
 		Label:       meta.Label,
 		Description: meta.Description,
 		Capabilities: sdk.Capabilities{
+			Interactions:     sdk.InteractionCapabilities{ToolApproval: true, PlanConfirmation: true, Update: "always"},
 			LoginModes:       []string{sdk.LoginModeCredential},
 			Text:             caps.Text,
 			Media:            caps.Media,
@@ -235,6 +236,9 @@ func (c Connector) Send(ctx context.Context, runtime sdk.Runtime, req sdk.Outbou
 		return nil, err
 	}
 	accountUUID := accountKey(account)
+	if req.Interaction != nil {
+		return sendDingtalkInteraction(ctx, runtime, account, req)
+	}
 	if strings.TrimSpace(req.Text) == "" && len(req.Attachments) == 0 {
 		return nil, fmt.Errorf("%s outbound text or attachments are required", Platform)
 	}
@@ -517,6 +521,9 @@ func (c Connector) processStreamEvent(ctx context.Context, runtime sdk.Runtime, 
 	})
 	if err != nil {
 		return nil, err
+	}
+	if event.ConversationID != "" {
+		state.Conversations[event.ConversationID] = beakstate.Conversation{ChatID: chat.ChatID, ChatType: chat.ChatType, UpdatedAt: time.Now().UTC()}
 	}
 	state.PeerSessions[chat.StateKey()] = sessionUUID
 	state.InboundSeen[key] = time.Now().UTC().Format(time.RFC3339Nano)
@@ -1413,6 +1420,7 @@ func sdkAccountToState(account sdk.ChannelAccount) beakstate.AccountState {
 		ChatbotUserID:              firstString(account.State["chatbot_user_id"], standardBotIdentityValue(account.State, "chatbot_user_id"), account.Credential["chatbot_user_id"]),
 		ChatbotCorpID:              firstString(account.Credential["chatbot_corp_id"], account.State["chatbot_corp_id"]),
 		ChannelLinkSession:         stringValue(account.State["channel_link_session"]),
+		Conversations:              conversationMap(account.State["conversations"]),
 		PeerSessions:               stringMap(account.State["peer_sessions"]),
 		SessionWebhooks:            webhookMap(account.State["session_webhooks"]),
 		InboundSeen:                stringMap(account.State["inbound_seen"]),
@@ -1445,17 +1453,18 @@ func accountStateToSDK(account beakstate.AccountState, existing sdk.ChannelAccou
 		existing.Credential = map[string]any{}
 	}
 	existing.State = map[string]any{
-		"channel_link_session":                         account.ChannelLinkSession,
-		"peer_sessions":                                account.PeerSessions,
-		"session_webhooks":                             account.SessionWebhooks,
-		"inbound_seen":                                 account.InboundSeen,
-		"sent_beak_messages":                           account.SentBeakMessages,
-		"stream_cursors":                               account.StreamCursors,
-		"access_token":                                 account.AccessToken,
-		"access_token_expires_at":                      account.AccessTokenExpires,
-		"chatbot_user_id":                              account.ChatbotUserID,
-		"chatbot_corp_id":                              account.ChatbotCorpID,
-		"robot_code":                                   account.RobotCode,
+		"channel_link_session":    account.ChannelLinkSession,
+		"conversations":           account.Conversations,
+		"peer_sessions":           account.PeerSessions,
+		"session_webhooks":        account.SessionWebhooks,
+		"inbound_seen":            account.InboundSeen,
+		"sent_beak_messages":      account.SentBeakMessages,
+		"stream_cursors":          account.StreamCursors,
+		"access_token":            account.AccessToken,
+		"access_token_expires_at": account.AccessTokenExpires,
+		"chatbot_user_id":         account.ChatbotUserID,
+		"chatbot_corp_id":         account.ChatbotCorpID,
+		"robot_code":              account.RobotCode,
 		sdk.RuntimeHealthKeyStreamConnectionState:      account.StreamConnectionState,
 		sdk.RuntimeHealthKeyStreamConnectedAt:          account.StreamConnectedAt,
 		sdk.RuntimeHealthKeyStreamDisconnectedAt:       account.StreamDisconnectedAt,
@@ -1756,3 +1765,12 @@ func credentialValidationFailure(credential, state map[string]any, err error) *s
 
 var _ sdk.Connector = Connector{}
 var _ EventConnector = Connector{}
+
+func conversationMap(value any) map[string]beakstate.Conversation {
+	out := make(map[string]beakstate.Conversation)
+	data, err := json.Marshal(value)
+	if err == nil {
+		_ = json.Unmarshal(data, &out)
+	}
+	return out
+}

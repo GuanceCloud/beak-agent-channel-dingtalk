@@ -96,6 +96,9 @@ func (c Connector) handleDingTalkStreamDataFrame(ctx context.Context, runtime sd
 	case dtutils.SubscriptionTypeKSystem:
 		return c.handleDingTalkStreamSystemFrame(frame, out), nil
 	case dtutils.SubscriptionTypeKCallback:
+		if frame.GetTopic() == cardCallbackTopic {
+			return handleDingtalkInteraction(ctx, runtime, account, frame, out)
+		}
 		if frame.GetTopic() != dtpayload.BotMessageCallbackTopic {
 			return dtpayload.NewDataFrameResponse(dtpayload.DataFrameResponseStatusCodeKHandlerNotFound), nil
 		}
@@ -154,6 +157,7 @@ func dingtalkConnectionEndpoint(ctx context.Context, httpClient *http.Client, ba
 			{Type: dtutils.SubscriptionTypeKSystem, Topic: "ping"},
 			{Type: dtutils.SubscriptionTypeKSystem, Topic: "disconnect"},
 			{Type: dtutils.SubscriptionTypeKCallback, Topic: dtpayload.BotMessageCallbackTopic},
+			{Type: dtutils.SubscriptionTypeKCallback, Topic: cardCallbackTopic},
 		},
 	}
 	if localIP, err := dtutils.GetFirstLanIP(); err == nil {

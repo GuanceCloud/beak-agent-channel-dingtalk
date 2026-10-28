@@ -11,35 +11,42 @@ const (
 	trackedStateTTL     = 7 * 24 * time.Hour
 )
 
+type Conversation struct {
+	ChatID    string    `json:"chat_id"`
+	ChatType  string    `json:"chat_type"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 type AccountState struct {
-	AccountID                  string             `json:"account_id"`
-	ClientID                   string             `json:"client_id,omitempty"`
-	RobotCode                  string             `json:"robot_code,omitempty"`
-	BaseURL                    string             `json:"base_url,omitempty"`
-	AccessToken                string             `json:"access_token,omitempty"`
-	AccessTokenExpires         time.Time          `json:"access_token_expires_at,omitempty"`
-	ChatbotUserID              string             `json:"chatbot_user_id,omitempty"`
-	ChatbotCorpID              string             `json:"chatbot_corp_id,omitempty"`
-	ChannelLinkSession         string             `json:"channel_link_session,omitempty"`
-	PeerSessions               map[string]string  `json:"peer_sessions,omitempty"`
-	SessionWebhooks            map[string]Webhook `json:"session_webhooks,omitempty"`
-	InboundSeen                map[string]string  `json:"inbound_seen,omitempty"`
-	SentBeakMessages           map[string]string  `json:"sent_beak_messages,omitempty"`
-	StreamCursors              map[string]string  `json:"stream_cursors,omitempty"`
-	StreamConnectionState      string             `json:"stream_connection_state,omitempty"`
-	StreamConnectedAt          time.Time          `json:"stream_connected_at,omitempty"`
-	StreamDisconnectedAt       time.Time          `json:"stream_disconnected_at,omitempty"`
-	StreamLastActivityAt       time.Time          `json:"stream_last_activity_at,omitempty"`
-	StreamLastPingAt           time.Time          `json:"stream_last_ping_at,omitempty"`
-	StreamLastPongAt           time.Time          `json:"stream_last_pong_at,omitempty"`
-	StreamLastEventAt          time.Time          `json:"stream_last_event_at,omitempty"`
-	StreamLastError            string             `json:"stream_last_error,omitempty"`
-	StreamLastErrorAt          time.Time          `json:"stream_last_error_at,omitempty"`
-	StreamReconnectRequestedAt time.Time          `json:"stream_reconnect_requested_at,omitempty"`
-	StreamReconnectError       string             `json:"stream_reconnect_error,omitempty"`
-	StreamReconnectErrorAt     time.Time          `json:"stream_reconnect_error_at,omitempty"`
-	StreamSessionExpired       bool               `json:"stream_session_expired,omitempty"`
-	UpdatedAt                  time.Time          `json:"updated_at"`
+	Conversations              map[string]Conversation `json:"conversations,omitempty"`
+	AccountID                  string                  `json:"account_id"`
+	ClientID                   string                  `json:"client_id,omitempty"`
+	RobotCode                  string                  `json:"robot_code,omitempty"`
+	BaseURL                    string                  `json:"base_url,omitempty"`
+	AccessToken                string                  `json:"access_token,omitempty"`
+	AccessTokenExpires         time.Time               `json:"access_token_expires_at,omitempty"`
+	ChatbotUserID              string                  `json:"chatbot_user_id,omitempty"`
+	ChatbotCorpID              string                  `json:"chatbot_corp_id,omitempty"`
+	ChannelLinkSession         string                  `json:"channel_link_session,omitempty"`
+	PeerSessions               map[string]string       `json:"peer_sessions,omitempty"`
+	SessionWebhooks            map[string]Webhook      `json:"session_webhooks,omitempty"`
+	InboundSeen                map[string]string       `json:"inbound_seen,omitempty"`
+	SentBeakMessages           map[string]string       `json:"sent_beak_messages,omitempty"`
+	StreamCursors              map[string]string       `json:"stream_cursors,omitempty"`
+	StreamConnectionState      string                  `json:"stream_connection_state,omitempty"`
+	StreamConnectedAt          time.Time               `json:"stream_connected_at,omitempty"`
+	StreamDisconnectedAt       time.Time               `json:"stream_disconnected_at,omitempty"`
+	StreamLastActivityAt       time.Time               `json:"stream_last_activity_at,omitempty"`
+	StreamLastPingAt           time.Time               `json:"stream_last_ping_at,omitempty"`
+	StreamLastPongAt           time.Time               `json:"stream_last_pong_at,omitempty"`
+	StreamLastEventAt          time.Time               `json:"stream_last_event_at,omitempty"`
+	StreamLastError            string                  `json:"stream_last_error,omitempty"`
+	StreamLastErrorAt          time.Time               `json:"stream_last_error_at,omitempty"`
+	StreamReconnectRequestedAt time.Time               `json:"stream_reconnect_requested_at,omitempty"`
+	StreamReconnectError       string                  `json:"stream_reconnect_error,omitempty"`
+	StreamReconnectErrorAt     time.Time               `json:"stream_reconnect_error_at,omitempty"`
+	StreamSessionExpired       bool                    `json:"stream_session_expired,omitempty"`
+	UpdatedAt                  time.Time               `json:"updated_at"`
 }
 
 type Webhook struct {
@@ -50,6 +57,9 @@ type Webhook struct {
 func (a *AccountState) EnsureMaps() {
 	if a == nil {
 		return
+	}
+	if a.Conversations == nil {
+		a.Conversations = make(map[string]Conversation)
 	}
 	if a.PeerSessions == nil {
 		a.PeerSessions = make(map[string]string)
@@ -77,6 +87,7 @@ func TouchAccount(account *AccountState) error {
 	}
 	account.EnsureMaps()
 	now := time.Now().UTC()
+	pruneConversations(account.Conversations, now)
 	pruneExpiredWebhooks(account.SessionWebhooks, now)
 	pruneTimestampMap(account.InboundSeen, now)
 	pruneTimestampMap(account.SentBeakMessages, now)
@@ -119,5 +130,25 @@ func pruneTimestampMap(values map[string]string, now time.Time) {
 	for len(values) > maxTrackedStateKeys && len(items) > 0 {
 		delete(values, items[0].key)
 		items = items[1:]
+	}
+}
+
+// Conversation aliases are learned only from authenticated incoming messages.
+func pruneConversations(values map[string]Conversation, now time.Time) {
+	for key, value := range values {
+		if now.Sub(value.UpdatedAt) > trackedStateTTL {
+			delete(values, key)
+		}
+	}
+	if len(values) <= maxTrackedStateKeys {
+		return
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool { return values[keys[i]].UpdatedAt.Before(values[keys[j]].UpdatedAt) })
+	for _, key := range keys[:len(values)-maxTrackedStateKeys] {
+		delete(values, key)
 	}
 }
