@@ -180,3 +180,20 @@ func templateButtonVisible(t *testing.T, button templateComponent, data map[stri
 	}
 	return result
 }
+
+func TestTemplateLocalizedVariables(t *testing.T) {
+	for _, tc := range []struct{ language, want string }{{"en", "Tool approval"}, {"zh", "操作审批"}, {"", "操作审批"}} {
+		card := sdk.InteractionCard{RequestID: "approval_locale", Kind: "tool_approval", State: "pending"}
+		raw, _ := json.Marshal(map[string]string{"language": tc.language})
+		if err := json.Unmarshal(raw, &card); err != nil {
+			t.Fatal(err)
+		}
+		data, err := dingtalk.InteractionData(card)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if data["approval_heading"] != tc.want {
+			t.Fatalf("language %q: heading=%q", tc.language, data["approval_heading"])
+		}
+	}
+}

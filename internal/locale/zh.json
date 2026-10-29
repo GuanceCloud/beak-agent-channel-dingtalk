@@ -1,0 +1,16 @@
+{
+  "Only the requester can decide this approval. Please contact the requester.": "只有本次任务的发起人可以审批，请联系发起人处理。",
+  "Tool approval": "操作审批",
+  "Awaiting confirmation": "待确认",
+  "Approved": "已批准",
+  "Rejected": "已拒绝",
+  "Canceled": "已取消",
+  "Expired": "已过期",
+  "The Agent requests this operation. Review the details before deciding.": "Agent 请求执行以下操作，请核对具体内容后决定。",
+  "Operation authorized. Execution results will follow separately.": "本次操作已获授权，执行结果将另行回复。",
+  "Operation rejected. This tool call will not execute.": "本次操作未获授权，该工具调用不会执行。",
+  "This request has ended and cannot be acted on.": "本次请求已结束，无法继续操作。",
+  "Approval expired. Send a new request to continue.": "本次审批已过期，如需继续请重新发起。",
+  "Approval details": "审批内容",
+  "Only the requester can decide. Full access is not enabled. Group members do not share authorization.": "仅请求发起人可审批。授权不会切换为完全访问权限，群成员之间不共享授权。"
+}

@@ -3,6 +3,7 @@ package dingtalk
 import (
 	"context"
 	"fmt"
+	"github.com/GuanceCloud/beak-agent-channel-dingtalk/internal/locale"
 	"github.com/GuanceCloud/beak-agent-channel-dingtalk/sdk"
 	"net/http"
 	"strconv"
@@ -15,7 +16,22 @@ func InteractionData(card sdk.InteractionCard) (map[string]string, error) {
 	if len(card.Inputs) > 0 {
 		return nil, fmt.Errorf("dingtalk native input requires a supported input template")
 	}
+	tr := locale.Translator(sdk.ResolveInteractionLanguage("dingtalk", card.Language))
 	data := map[string]string{"title": card.Title, "summary": card.Summary, "state": card.State, "pending": "false"}
+	data["approval_heading"] = tr("Tool approval")
+	data["pending_label"] = tr("Awaiting confirmation")
+	data["approved_label"] = tr("Approved")
+	data["rejected_label"] = tr("Rejected")
+	data["canceled_label"] = tr("Canceled")
+	data["expired_label"] = tr("Expired")
+	data["pending_hint"] = tr("The Agent requests this operation. Review the details before deciding.")
+	data["approved_hint"] = tr("Operation authorized. Execution results will follow separately.")
+	data["rejected_hint"] = tr("Operation rejected. This tool call will not execute.")
+	data["canceled_hint"] = tr("This request has ended and cannot be acted on.")
+	data["expired_hint"] = tr("Approval expired. Send a new request to continue.")
+	data["details_label"] = tr("Approval details")
+	data["approval_footer"] = tr("Only the requester can decide. Full access is not enabled. Group members do not share authorization.")
+
 	if card.State == "pending" {
 		data["pending"] = "true"
 	}

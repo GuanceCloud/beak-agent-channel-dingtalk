@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/GuanceCloud/beak-agent-channel-dingtalk/internal/dingtalk"
+	"github.com/GuanceCloud/beak-agent-channel-dingtalk/internal/locale"
 	"github.com/GuanceCloud/beak-agent-channel-dingtalk/sdk"
 	dtpayload "github.com/open-dingtalk/dingtalk-stream-sdk-go/payload"
 	"strconv"
@@ -89,12 +90,13 @@ func handleDingtalkInteraction(ctx context.Context, runtime sdk.Runtime, account
 	if err != nil {
 		var access interface{ InteractionErrorCode() string }
 		if errors.As(err, &access) && access.InteractionErrorCode() == "actor_not_requester" {
+			tr := locale.Translator(sdk.InteractionErrorLanguage("dingtalk", err))
 			// Existing published templates do not have a private feedback field.
 			// Send the notice only to the verified clicking member, preserving the
 			// shared pending card and the requester's ability to decide.
 			_, sendErr := (Connector{}).Send(ctx, runtime, sdk.OutboundMessage{
 				AccountUUID: account.UUID, ChatType: sdk.ChatTypeDirect, ChatID: action.ActorID,
-				Text: "只有本次任务的发起人可以审批，请联系发起人处理。",
+				Text: tr("Only the requester can decide this approval. Please contact the requester."),
 			})
 			if sendErr != nil {
 				return nil, fmt.Errorf("send private interaction feedback: %w", sendErr)
