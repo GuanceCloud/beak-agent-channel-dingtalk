@@ -76,9 +76,13 @@ func TestDingtalkApprovalTemplateContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	buttons := map[string]templateComponent{}
+	var feedback templateComponent
 	var collect func([]templateComponent)
 	collect = func(components []templateComponent) {
 		for _, component := range components {
+			if component.ID == "beak_approval_feedback" {
+				feedback = component
+			}
 			if component.ComponentName == "SingleButton" {
 				if _, exists := buttons[component.ID]; exists {
 					t.Fatalf("duplicate button %q", component.ID)
@@ -93,11 +97,30 @@ func TestDingtalkApprovalTemplateContract(t *testing.T) {
 		t.Fatalf("got %d buttons, want 4", len(buttons))
 	}
 	declared := map[string]bool{}
+	private := map[string]bool{}
 	for _, variable := range editor.VariableList {
-		if variable.Type != "string" || variable.Private || declared[variable.Name] {
-			t.Fatalf("invalid public variable: %+v", variable)
+		if variable.Type != "string" || declared[variable.Name] || private[variable.Name] {
+			t.Fatalf("invalid variable: %+v", variable)
 		}
-		declared[variable.Name] = true
+		if variable.Private {
+			private[variable.Name] = true
+		} else {
+			declared[variable.Name] = true
+		}
+	}
+	if len(private) != 2 || !private["approval_feedback"] || !private["approval_feedback_visible"] {
+		t.Fatalf("wrong private variables: %+v", private)
+	}
+	if feedback.ComponentName != "BaseText" || feedback.Props.Text.Content != "${approval_feedback}" {
+		t.Fatal("missing private feedback text")
+	}
+	for _, visible := range []string{"", "false", "true"} {
+		for _, state := range []string{"pending", "approved", "rejected", "canceled", "expired"} {
+			got := templateButtonVisible(t, feedback, map[string]string{"state": state, "approval_feedback_visible": visible})
+			if got != (visible == "true" && state == "pending") {
+				t.Fatalf("feedback visibility: state=%s private=%s got=%v", state, visible, got)
+			}
+		}
 	}
 	for _, actionID := range []string{"approve", "reject", "revise", "submit"} {
 		t.Run(actionID, func(t *testing.T) {

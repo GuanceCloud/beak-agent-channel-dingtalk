@@ -31,7 +31,7 @@ v1 支持：
 v1 不支持：
 
 - media、voice、typing status。
-- AI Card 或互动卡片。
+- 通用 AI Card；审批互动卡片使用随包模板。
 - SDK 自己维护 DingTalk Stream WebSocket 客户端。
 - 修改 Beak host 代码。
 - 把钉钉 connector 做成 CLI。
@@ -338,3 +338,11 @@ Beak host 保存 account state，SDK 通过 `sdk.AccountStore` 读取并回写�
 go test ./...
 go build ./...
 ```
+
+## 钉钉模块 v0.0.49：群审批个人提示
+
+非发起人点击审批时，SDK 通过 Stream 回调 `userPrivateData` 仅更新点击者的卡片视图，不发送私聊消息，不修改公共审批状态。提示沿用该审批语言；公共状态变为批准、拒绝、取消或过期后，模板隐藏个人提示。
+
+升级前先处理完旧的待审批卡片。导入本版本 `templates/beak-approval-card.json`（前端下载名为 `approval-card.json`），确认 `approval_feedback` 和 `approval_feedback_visible` 为私有变量，发布并关联机器人应用，再更新 Beak 渠道模板 ID。仅升级 SDK 不会自动升级旧云端模板或历史卡片；旧模板缺少提示区域时不会显示个人反馈，也不会回退私聊。
+
+本次仅发布钉钉 GitHub 模块 `0.0.49` / `v0.0.49`；不更新其他 IM、共享 SDK 契约或根仓库统一发布标签。客户端的双成员可见范围和终态覆盖仍须在新模板下手动验收。

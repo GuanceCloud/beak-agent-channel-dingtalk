@@ -3,10 +3,10 @@ package beakdingtalk
 import (
 	"context"
 	"encoding/json"
+	"github.com/GuanceCloud/beak-agent-channel-dingtalk/internal/locale"
 	"github.com/GuanceCloud/beak-agent-channel-dingtalk/sdk"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 )
 
@@ -15,45 +15,76 @@ type cardGateway struct {
 	actions []sdk.InteractionAction
 }
 
-type deniedCardGateway struct{ fakeSDKGateway }
-type requesterDenied struct{}
+type deniedCardGateway struct {
+	fakeSDKGateway
+	language string
+}
+type requesterDenied struct{ language string }
 
-func (requesterDenied) Error() string                { return "denied" }
-func (requesterDenied) InteractionErrorCode() string { return "actor_not_requester" }
-func (*deniedCardGateway) HandleInteraction(context.Context, sdk.InteractionAction) (*sdk.InteractionResult, error) {
-	return nil, requesterDenied{}
+func (e requesterDenied) InteractionLanguage() string { return e.language }
+func (requesterDenied) Error() string                 { return "denied" }
+func (requesterDenied) InteractionErrorCode() string  { return "actor_not_requester" }
+func (g *deniedCardGateway) HandleInteraction(context.Context, sdk.InteractionAction) (*sdk.InteractionResult, error) {
+	return nil, requesterDenied{language: g.language}
 }
 
-func TestDingtalkNonRequesterGetsDirectFeedbackWithoutUpdatingCard(t *testing.T) {
-	var direct map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/v1.0/oauth2/accessToken":
-			_, _ = w.Write([]byte(`{"accessToken":"token","expireIn":7200}`))
-		case "/v1.0/robot/oToMessages/batchSend":
-			if err := json.NewDecoder(r.Body).Decode(&direct); err != nil {
-				t.Error(err)
-			}
-			_, _ = w.Write([]byte(`{"processQueryKey":"sent"}`))
-		default:
-			t.Errorf("unexpected endpoint: %s", r.URL.Path)
-			w.WriteHeader(http.StatusInternalServerError)
+func TestDingtalkNonRequesterGetsPrivateCardFeedbackWithoutSendingMessages(t *testing.T) {
+	for _, language := range []string{"", "zh", "en"} {
+		for _, decision := range []string{"approve", "reject"} {
+			t.Run(language+"/"+decision, func(t *testing.T) {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					t.Errorf("denied callback must not send HTTP requests: %s", r.URL.Path)
+					w.WriteHeader(http.StatusInternalServerError)
+				}))
+				defer server.Close()
+				account := sdkAccount("account-1", "client-1", "secret", server.URL)
+				runtime := sdk.Runtime{Account: account, AccountStore: newFakeSDKAccountStore(), Gateway: &deniedCardGateway{language: language}, HTTPClient: server.Client()}
+				content, _ := json.Marshal(map[string]any{"cardPrivateData": map[string]any{"params": map[string]string{"beak_action": "approval_123:2:" + decision}}})
+				callback, _ := json.Marshal(map[string]any{"corpId": "corp-1", "spaceType": "IM_GROUP", "spaceId": "dtv1.card//IM_GROUP.cid-group", "userIdType": 1, "userId": "other-member", "outTrackId": "approval_123_2", "content": string(content)})
+				frame, _ := json.Marshal(map[string]any{"type": "CALLBACK", "headers": map[string]string{"topic": cardCallbackTopic, "messageId": "event-1"}, "data": string(callback)})
+				for attempt := 0; attempt < 2; attempt++ {
+					out, err := (Connector{}).HandleStreamFrame(context.Background(), runtime, account, sdk.StreamFrameRequest{MessageType: sdk.StreamMessageTypeText, Data: frame})
+					if err != nil || out == nil || len(out.ResponseFrames) != 1 {
+						t.Fatalf("callback=%#v err=%v", out, err)
+					}
+					var response struct {
+						Code    int               `json:"code"`
+						Data    string            `json:"data"`
+						Headers map[string]string `json:"headers"`
+					}
+					if err := json.Unmarshal(out.ResponseFrames[0].Data, &response); err != nil {
+						t.Fatal(err)
+					}
+					if response.Code != 200 || response.Headers["messageId"] != "event-1" {
+						t.Fatalf("wrong callback ACK: %+v", response)
+					}
+					var body map[string]json.RawMessage
+					if err := json.Unmarshal([]byte(response.Data), &body); err != nil {
+						t.Fatal(err)
+					}
+					if len(body) != 1 || body["response"] == nil {
+						t.Fatalf("missing official card callback response envelope: %s", response.Data)
+					}
+					var cardResponse map[string]json.RawMessage
+					if err := json.Unmarshal(body["response"], &cardResponse); err != nil {
+						t.Fatal(err)
+					}
+					if len(cardResponse) != 1 || cardResponse["userPrivateData"] == nil {
+						t.Fatalf("must update only the clicking user's view: %s", response.Data)
+					}
+					var private struct {
+						Params map[string]string `json:"cardParamMap"`
+					}
+					if err := json.Unmarshal(cardResponse["userPrivateData"], &private); err != nil {
+						t.Fatal(err)
+					}
+					want := locale.Translator(sdk.ResolveInteractionLanguage("dingtalk", language))("Only the requester can decide this approval. Please contact the requester.")
+					if len(private.Params) != 2 || private.Params["approval_feedback"] != want || private.Params["approval_feedback_visible"] != "true" {
+						t.Fatalf("wrong private feedback: %+v", private.Params)
+					}
+				}
+			})
 		}
-	}))
-	defer server.Close()
-	account := sdkAccount("account-1", "client-1", "secret", server.URL)
-	runtime := sdk.Runtime{Account: account, AccountStore: newFakeSDKAccountStore(), Gateway: &deniedCardGateway{}, HTTPClient: server.Client()}
-	content, _ := json.Marshal(map[string]any{"cardPrivateData": map[string]any{"params": map[string]string{"beak_action": "approval_123:2:approve"}}})
-	callback, _ := json.Marshal(map[string]any{"corpId": "corp-1", "spaceType": "IM_GROUP", "spaceId": "dtv1.card//IM_GROUP.cid-group", "userIdType": 1, "userId": "other-member", "outTrackId": "approval_123_2", "content": string(content)})
-	frame, _ := json.Marshal(map[string]any{"type": "CALLBACK", "headers": map[string]string{"topic": cardCallbackTopic, "messageId": "event-1"}, "data": string(callback)})
-	out, err := (Connector{}).HandleStreamFrame(context.Background(), runtime, account, sdk.StreamFrameRequest{MessageType: sdk.StreamMessageTypeText, Data: frame})
-	if err != nil || out == nil {
-		t.Fatalf("callback=%#v err=%v", out, err)
-	}
-	ids, ok := direct["userIds"].([]any)
-	if !ok || len(ids) != 1 || ids[0] != "other-member" || !strings.Contains(direct["msgParam"].(string), "发起人") {
-		t.Fatalf("wrong private feedback: %#v", direct)
 	}
 }
 

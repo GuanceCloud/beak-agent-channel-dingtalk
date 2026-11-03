@@ -91,18 +91,23 @@ func handleDingtalkInteraction(ctx context.Context, runtime sdk.Runtime, account
 		var access interface{ InteractionErrorCode() string }
 		if errors.As(err, &access) && access.InteractionErrorCode() == "actor_not_requester" {
 			tr := locale.Translator(sdk.InteractionErrorLanguage("dingtalk", err))
-			// Existing published templates do not have a private feedback field.
-			// Send the notice only to the verified clicking member, preserving the
-			// shared pending card and the requester's ability to decide.
-			_, sendErr := (Connector{}).Send(ctx, runtime, sdk.OutboundMessage{
-				AccountUUID: account.UUID, ChatType: sdk.ChatTypeDirect, ChatID: action.ActorID,
-				Text: tr("Only the requester can decide this approval. Please contact the requester."),
+			// The callback targets the authenticated clicking user's private view.
+			// Do not update public card data or create a separate chat message.
+			body, marshalErr := json.Marshal(map[string]any{
+				"response": map[string]any{
+					"userPrivateData": map[string]any{"cardParamMap": map[string]string{
+						"approval_feedback":         tr("Only the requester can decide this approval. Please contact the requester."),
+						"approval_feedback_visible": "true",
+					}},
+				},
 			})
-			if sendErr != nil {
-				return nil, fmt.Errorf("send private interaction feedback: %w", sendErr)
+			if marshalErr != nil {
+				return nil, marshalErr
 			}
+			response := dtpayload.NewSuccessDataFrameResponse()
+			response.Data = string(body)
 			out.EventResult = &sdk.StreamEventResult{Type: "interaction"}
-			return dtpayload.NewSuccessDataFrameResponse(), nil
+			return response, nil
 		}
 		return nil, err
 	}
