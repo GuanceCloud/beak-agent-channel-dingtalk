@@ -66,6 +66,9 @@ func TestDingtalkApprovalTemplateContract(t *testing.T) {
 		Schema struct {
 			ComponentsTree []templateComponent `json:"componentsTree"`
 		} `json:"schema"`
+		MockData struct {
+			CardPrivateData map[string]string `json:"cardPrivateData"`
+		} `json:"mockData"`
 		VariableList []struct {
 			Name    string `json:"name"`
 			Type    string `json:"type"`
@@ -110,6 +113,11 @@ func TestDingtalkApprovalTemplateContract(t *testing.T) {
 	}
 	if len(private) != 2 || !private["approval_feedback"] || !private["approval_feedback_visible"] {
 		t.Fatalf("wrong private variables: %+v", private)
+	}
+	for name := range private {
+		if _, ok := editor.MockData.CardPrivateData[name]; !ok {
+			t.Fatalf("private variable %q has no editor mock value; DingTalk import cannot render", name)
+		}
 	}
 	if feedback.ComponentName != "BaseText" || feedback.Props.Text.Content != "${approval_feedback}" {
 		t.Fatal("missing private feedback text")

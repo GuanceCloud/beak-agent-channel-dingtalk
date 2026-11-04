@@ -346,3 +346,7 @@ go build ./...
 升级前先处理完旧的待审批卡片。导入本版本 `templates/beak-approval-card.json`（前端下载名为 `approval-card.json`），确认 `approval_feedback` 和 `approval_feedback_visible` 为私有变量，发布并关联机器人应用，再更新 Beak 渠道模板 ID。仅升级 SDK 不会自动升级旧云端模板或历史卡片；旧模板缺少提示区域时不会显示个人反馈，也不会回退私聊。
 
 本次仅发布钉钉 GitHub 模块 `0.0.49` / `v0.0.49`；不更新其他 IM、共享 SDK 契约或根仓库统一发布标签。客户端的双成员可见范围和终态覆盖仍须在新模板下手动验收。
+
+### 搭建器导入预览数据
+
+模板必须为私有变量在 `editorData.mockData.cardPrivateData` 中提供预览初值：`approval_feedback` 为空，`approval_feedback_visible` 为字符串 `false`。缺失私有数据对象会导致官方搭建器导入时报错；这些初值只影响模板编辑预览，不改变 Stream 回调或权限校验。
