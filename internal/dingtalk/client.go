@@ -139,6 +139,7 @@ type Client struct {
 	AccessTokenExpiresAt time.Time
 	RequestTimeout       time.Duration
 	HTTPClient           *http.Client
+	mediaAccessToken     string
 }
 
 func NewClient(baseURL, clientID, clientSecret, robotCode string) *Client {
@@ -312,16 +313,23 @@ func (c *Client) SendMedia(ctx context.Context, req SendMediaRequest) (*SendText
 	if robotCode == "" {
 		robotCode = strings.TrimSpace(c.RobotCode)
 	}
-	msgKey := "sampleFileMsg"
-	msgParam := map[string]string{"mediaId": req.MediaID}
+	msgKey := "sampleFile"
+	fileType := strings.TrimPrefix(strings.ToLower(filepath.Ext(req.FileName)), ".")
+	if fileType == "" {
+		fileType = "file"
+	}
+	msgParam := map[string]string{
+		"mediaId":  "@" + strings.TrimPrefix(strings.TrimSpace(req.MediaID), "@"),
+		"fileName": req.FileName,
+		"fileType": fileType,
+	}
 	switch strings.TrimSpace(req.Kind) {
-	case "image", "sticker":
-		msgKey = "sampleImageMsg"
-		msgParam = map[string]string{"photoURL": req.MediaID}
 	case "audio":
 		msgKey = "sampleAudioMsg"
+		msgParam = map[string]string{"mediaId": req.MediaID}
 	case "video":
 		msgKey = "sampleVideoMsg"
+		msgParam = map[string]string{"mediaId": req.MediaID}
 	}
 	encoded, err := json.Marshal(msgParam)
 	if err != nil {
@@ -342,10 +350,13 @@ func (c *Client) SendMedia(ctx context.Context, req SendMediaRequest) (*SendText
 	if resp.Code != "" {
 		return nil, fmt.Errorf("send media failed: code=%s message=%s", resp.Code, resp.Message)
 	}
+	if strings.TrimSpace(resp.ProcessQueryKey) == "" {
+		return nil, fmt.Errorf("dingtalk media send returned no processQueryKey")
+	}
 	return &resp, nil
 }
 
-func (c *Client) UploadMedia(ctx context.Context, path, kind, robotCode, fileName string) (string, error) {
+func (c *Client) UploadMedia(ctx context.Context, path, kind, fileName string) (string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return "", err
@@ -358,26 +369,28 @@ func (c *Client) UploadMedia(ctx context.Context, path, kind, robotCode, fileNam
 		return "", err
 	}
 	defer file.Close()
-	token := strings.TrimSpace(c.AccessToken)
-	if token == "" {
-		token, err = c.Token(ctx)
+	if c.mediaAccessToken == "" {
+		token, err := c.doMediaOAPI(ctx, http.MethodGet, "/gettoken", neturl.Values{
+			"appkey": {c.ClientID}, "appsecret": {c.ClientSecret},
+		}, nil, "")
 		if err != nil {
 			return "", err
 		}
+		if token.AccessToken == "" {
+			return "", fmt.Errorf("dingtalk media token response has no access_token")
+		}
+		c.mediaAccessToken = token.AccessToken
+	}
+	mediaType := "file"
+	switch strings.TrimSpace(kind) {
+	case "audio":
+		mediaType = "voice"
+	case "video":
+		mediaType = "video"
 	}
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
-	if err := writer.WriteField("robotCode", strings.TrimSpace(robotCode)); err != nil {
-		return "", err
-	}
-	if err := writer.WriteField("type", strings.TrimSpace(kind)); err != nil {
-		return "", err
-	}
-	uploadName := strings.TrimSpace(fileName)
-	if uploadName == "" {
-		uploadName = path
-	}
-	part, err := writer.CreateFormFile("file", filepath.Base(uploadName))
+	part, err := writer.CreateFormFile("media", fileName)
 	if err != nil {
 		return "", err
 	}
@@ -387,14 +400,16 @@ func (c *Client) UploadMedia(ctx context.Context, path, kind, robotCode, fileNam
 	if err := writer.Close(); err != nil {
 		return "", err
 	}
-	var resp MediaUploadResponse
-	if err := c.doMultipart(ctx, "/v1.0/robot/messageFiles/upload", &body, writer.FormDataContentType(), &resp, withAccessToken(token)); err != nil {
+	resp, err := c.doMediaOAPI(ctx, http.MethodPost, "/media/upload", neturl.Values{
+		"access_token": {c.mediaAccessToken}, "type": {mediaType},
+	}, &body, writer.FormDataContentType())
+	if err != nil {
 		return "", err
 	}
-	if resp.DownloadCode == "" {
-		return "", fmt.Errorf("dingtalk media upload failed: code=%s message=%s", resp.Code, resp.Message)
+	if resp.MediaID == "" {
+		return "", fmt.Errorf("dingtalk media upload returned no media_id")
 	}
-	return resp.DownloadCode, nil
+	return resp.MediaID, nil
 }
 
 func (c *Client) DownloadMedia(ctx context.Context, downloadCode, robotCode string) (string, func(), error) {
@@ -797,45 +812,51 @@ func (c *Client) doJSONURL(ctx context.Context, method, targetURL string, body a
 	return nil
 }
 
-func (c *Client) doMultipart(ctx context.Context, path string, body io.Reader, contentType string, out any, opts ...requestOption) error {
+// doMediaOAPI uses the legacy token protocol. Query parameters contain
+// credentials and must not be included in errors or forwarded on redirects.
+func (c *Client) doMediaOAPI(ctx context.Context, method, path string, query neturl.Values, body io.Reader, contentType string) (mediaOAPIResponse, error) {
+	var out mediaOAPIResponse
 	timeout := c.RequestTimeout
 	if timeout <= 0 {
 		timeout = defaultRequestTimeout
 	}
-	reqCtx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, c.url(path), body)
+
+	const base = "https://oapi.dingtalk.com"
+	req, err := http.NewRequestWithContext(ctx, method, base+path+"?"+query.Encode(), body)
 	if err != nil {
-		return err
+		return out, fmt.Errorf("build DingTalk media request %s %s", method, path)
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", contentType)
-	req.Header.Set("User-Agent", "BeakAgentDingTalk/0.1.0")
-	for _, opt := range opts {
-		opt(req)
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
-	client := c.HTTPClient
-	if client == nil {
-		client = http.DefaultClient
+	baseClient := c.HTTPClient
+	if baseClient == nil {
+		baseClient = http.DefaultClient
 	}
+	client := *baseClient
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		var urlErr *neturl.Error
+		if errors.As(err, &urlErr) {
+			err = urlErr.Err
+		}
+		return out, fmt.Errorf("DingTalk media request %s %s failed: %w", method, path, err)
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxMediaBytes))
-	if err != nil {
-		return err
-	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &HTTPError{StatusCode: resp.StatusCode, Method: http.MethodPost, Target: sanitizeURLForError(req.URL.String()), Body: string(data)}
+		return out, fmt.Errorf("DingTalk media request %s %s returned HTTP %d", method, path, resp.StatusCode)
 	}
-	if out != nil && len(bytes.TrimSpace(data)) > 0 {
-		if err := json.Unmarshal(data, out); err != nil {
-			return transientFailure(fmt.Sprintf("decode response: %v", err))
-		}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
+		return out, fmt.Errorf("decode DingTalk media response for %s: %w", path, err)
 	}
-	return nil
+	if out.ErrCode != 0 {
+		return out, fmt.Errorf("DingTalk media request %s %s failed: errcode=%d", method, path, out.ErrCode)
+	}
+	return out, nil
 }
 
 func isTimeoutError(err error) bool {

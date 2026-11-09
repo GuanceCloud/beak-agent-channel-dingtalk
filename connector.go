@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -341,14 +342,15 @@ func (c Connector) Send(ctx context.Context, runtime sdk.Runtime, req sdk.Outbou
 			result.AttachmentResults = append(result.AttachmentResults, item)
 			continue
 		}
-		mediaID, uploadErr := client.UploadMedia(ctx, path, attachment.Kind, robotCode, attachment.FileName)
+		fileName := filepath.Base(firstString(attachment.FileName, path))
+		mediaID, uploadErr := client.UploadMedia(ctx, path, attachment.Kind, fileName)
 		if uploadErr != nil {
 			item.Error = uploadErr.Error()
 			attachmentErrors = append(attachmentErrors, item.Error)
 			result.AttachmentResults = append(result.AttachmentResults, item)
 			continue
 		}
-		resp, sendErr := client.SendMedia(ctx, dingtalk.SendMediaRequest{ChatType: req.ChatType, ChatID: strings.TrimSpace(req.ChatID), Kind: attachment.Kind, MediaID: mediaID, RobotCode: robotCode, MessageUUID: req.MessageUUID})
+		resp, sendErr := client.SendMedia(ctx, dingtalk.SendMediaRequest{ChatType: req.ChatType, ChatID: strings.TrimSpace(req.ChatID), Kind: attachment.Kind, MediaID: mediaID, FileName: fileName, RobotCode: robotCode, MessageUUID: req.MessageUUID})
 		if sendErr != nil {
 			item.Error = sendErr.Error()
 			attachmentErrors = append(attachmentErrors, item.Error)

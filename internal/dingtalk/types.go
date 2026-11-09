@@ -47,6 +47,7 @@ type SendMediaRequest struct {
 	ChatID      string
 	Kind        string
 	MediaID     string
+	FileName    string
 	RobotCode   string
 	MessageUUID string
 }
@@ -57,10 +58,10 @@ type MediaDownloadResponse struct {
 	Message     string `json:"message,omitempty"`
 }
 
-type MediaUploadResponse struct {
-	DownloadCode string `json:"downloadCode"`
-	Code         string `json:"code,omitempty"`
-	Message      string `json:"message,omitempty"`
+type mediaOAPIResponse struct {
+	AccessToken string `json:"access_token"`
+	MediaID     string `json:"media_id"`
+	ErrCode     int    `json:"errcode"`
 }
 
 type AtOptions struct {

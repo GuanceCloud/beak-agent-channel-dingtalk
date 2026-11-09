@@ -83,34 +83,89 @@ func TestClientTokenAndSendGroupText(t *testing.T) {
 	}
 }
 
-func TestClientUploadMediaUsesDeclaredFilename(t *testing.T) {
+func TestClientSendsPNGAndPDFAsGroupFiles(t *testing.T) {
+	ctx := context.Background()
 	path := t.TempDir() + "/temporary-upload"
 	if err := os.WriteFile(path, []byte("media"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	client := NewClient("https://api.dingtalk.test", "client-1", "secret-1", "robot-1")
-	client.AccessToken = "token-1"
+	client.AccessToken = "send-token"
+	tokenCalls := 0
+	uploads := 0
+	sends := 0
+	var fileName, fileType string
 	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		if r.URL.Path != "/v1.0/robot/messageFiles/upload" {
+		query := r.URL.Query()
+		switch r.URL.Path {
+		case "/gettoken":
+			tokenCalls++
+			if r.URL.Host != "oapi.dingtalk.com" || r.Method != http.MethodGet ||
+				query.Get("appkey") != "client-1" || query.Get("appsecret") != "secret-1" {
+				t.Fatalf("invalid token request: %s %s", r.Method, r.URL)
+			}
+			return jsonResponse(map[string]any{"errcode": 0, "access_token": "upload-token"})
+		case "/media/upload":
+			uploads++
+			if r.URL.Host != "oapi.dingtalk.com" || r.Method != http.MethodPost ||
+				query.Get("access_token") != "upload-token" || query.Get("type") != "file" {
+				t.Fatalf("invalid upload request: %s %s", r.Method, r.URL)
+			}
+			if err := r.ParseMultipartForm(1024 * 1024); err != nil {
+				t.Fatal(err)
+			}
+			file, header, err := r.FormFile("media")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			data, err := io.ReadAll(file)
+			if err != nil || string(data) != "media" || header.Filename != fileName {
+				t.Fatalf("uploaded filename=%q data=%q error=%v", header.Filename, data, err)
+			}
+			return jsonResponse(map[string]any{"errcode": 0, "media_id": "@media-1"})
+		case "/v1.0/robot/groupMessages/send":
+			sends++
+			var body map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if r.Method != http.MethodPost || r.Header.Get("x-acs-dingtalk-access-token") != "send-token" ||
+				body["robotCode"] != "robot-1" || body["openConversationId"] != "cid-group" || body["msgKey"] != "sampleFile" {
+				t.Fatalf("invalid group send: %v", body)
+			}
+			var param map[string]string
+			if err := json.Unmarshal([]byte(body["msgParam"]), &param); err != nil {
+				t.Fatal(err)
+			}
+			if param["mediaId"] != "@media-1" || param["fileName"] != fileName || param["fileType"] != fileType {
+				t.Fatalf("invalid file parameters: %v", param)
+			}
+			return jsonResponse(map[string]any{"processQueryKey": "pqk-1"})
+		default:
 			t.Fatalf("unexpected request: %s", r.URL.Path)
+			return nil, nil
 		}
-		if err := r.ParseMultipartForm(1024 * 1024); err != nil {
-			t.Fatal(err)
-		}
-		file, header, err := r.FormFile("file")
-		if err != nil {
-			t.Fatal(err)
-		}
-		_ = file.Close()
-		if header.Filename != "report.pdf" {
-			t.Fatalf("uploaded filename=%q", header.Filename)
-		}
-		return jsonResponse(map[string]any{"downloadCode": "download-1"})
 	})}
 
-	code, err := client.UploadMedia(context.Background(), path, "file", "robot-1", "report.pdf")
-	if err != nil || code != "download-1" {
-		t.Fatalf("download code=%q error=%v", code, err)
+	for _, attachment := range []struct{ name, kind, extension string }{
+		{"photo.PNG", "image", "png"},
+		{"report.pdf", "file", "pdf"},
+	} {
+		fileName, fileType = attachment.name, attachment.extension
+		mediaID, err := client.UploadMedia(ctx, path, attachment.kind, fileName)
+		if err != nil || mediaID != "@media-1" {
+			t.Fatalf("upload %s: media ID=%q error=%v", fileName, mediaID, err)
+		}
+		resp, err := client.SendMedia(ctx, SendMediaRequest{
+			ChatType: ChatTypeGroup, ChatID: "cid-group", Kind: attachment.kind, MediaID: mediaID, FileName: fileName,
+		})
+		if err != nil || resp.ProcessQueryKey != "pqk-1" {
+			t.Fatalf("send %s: response=%+v error=%v", fileName, resp, err)
+		}
+	}
+	if tokenCalls != 1 || uploads != 2 || sends != 2 {
+		t.Fatalf("token calls=%d uploads=%d sends=%d", tokenCalls, uploads, sends)
 	}
 }
 
