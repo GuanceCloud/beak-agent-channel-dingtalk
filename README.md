@@ -235,6 +235,16 @@ x-acs-dingtalk-access-token: <access_token>
 
 To force Open API delivery even when a valid `sessionWebhook` exists, set `Raw["force_openapi"]=true` on the outbound message.
 
+### Native group mentions
+
+Group `Mentions` / `MentionAll` use text messages through a valid session webhook. The SDK does not append `@employeeID` to the body. A text reply carries structured `at` fields directly. A Markdown reply retains its body and is followed by one text notification, `Please see the reply above.` Replies with attachments keep OpenAPI delivery and send at most one webhook text notification after delivery. Direct chats do not add mentions. Interaction cards retain their existing path.
+
+`SendResult.Raw["mention_delivery"]` reports `status` (`sent`, `failed`, or `unsupported`) and an optional `reason`. Reasons are `notification_send_failed`, `session_webhook_unavailable`, and `session_webhook_disabled` (explicit `force_openapi`). Notification failure does not fail or retry an already delivered reply. Notifications have no automatic retry. A transport timeout can leave platform acceptance unknown; this is not an exactly-once guarantee.
+
+The ordinary `groupMessages/send` endpoint has no verified native mention contract. The SDK does not send speculative fields or treat a literal `@ID` as a successful notification. An expired webhook still permits reply delivery through OpenAPI, but cannot guarantee a mention. Client notification settings can also affect alerts.
+
+References: official DingTalk [OrgGroupSendRequest](https://github.com/alibabacloud-go/dingtalk/blob/master/robot_1_0/client.go), and a same-chat, same-staff-ID text/Markdown A/B check where only text produced a native mention.
+
 ## Lightweight Acknowledgement
 
 The connector exposes the same `Acknowledge` method as the other SDKs so Beak host can call a common adapter method:

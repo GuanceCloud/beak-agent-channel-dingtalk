@@ -256,6 +256,9 @@ func (c Connector) Send(ctx context.Context, runtime sdk.Runtime, req sdk.Outbou
 		client.AccessTokenExpiresAt = accountState.AccessTokenExpires
 	}
 	at := dingtalkOutboundAtOptions(req)
+	if req.ChatType != sdk.ChatTypeGroup {
+		at = dingtalk.AtOptions{}
+	}
 	format := dingtalkOutboundFormat(req)
 	if len(req.Attachments) == 0 && !boolValue(req.Raw["force_openapi"]) {
 		if webhook, ok := accountState.SessionWebhooks[outboundStateKey(req)]; ok && dingtalk.IsAllowedSessionWebhookURL(webhook.URL) && webhook.ExpiresAt.After(now.Add(10*time.Second)) {
@@ -265,7 +268,6 @@ func (c Connector) Send(ctx context.Context, runtime sdk.Runtime, req sdk.Outbou
 				resp, err = client.SendWebhookMarkdownMessage(ctx, webhook.URL, dingtalk.SendWebhookMarkdownRequest{
 					Title: dingtalkOutboundTitle(req),
 					Text:  req.Text,
-					At:    at,
 				})
 			} else {
 				resp, err = client.SendWebhookTextMessage(ctx, webhook.URL, dingtalk.SendWebhookTextRequest{
@@ -276,7 +278,7 @@ func (c Connector) Send(ctx context.Context, runtime sdk.Runtime, req sdk.Outbou
 			if err != nil {
 				return nil, err
 			}
-			return &sdk.SendResult{
+			result := &sdk.SendResult{
 				Platform:    Platform,
 				AccountUUID: accountUUID,
 				Raw: map[string]any{
@@ -286,7 +288,15 @@ func (c Connector) Send(ctx context.Context, runtime sdk.Runtime, req sdk.Outbou
 					"msg_type":        format,
 					"response":        resp.Raw,
 				},
-			}, nil
+			}
+			if hasDingtalkMentions(at) {
+				if format == "markdown" {
+					result.Raw["mention_delivery"] = sendDingtalkMention(ctx, client, accountState, req, at)
+				} else {
+					result.Raw["mention_delivery"] = &dingtalkMentionDelivery{Status: "sent"}
+				}
+			}
+			return result, nil
 		}
 	}
 	if client.AccessToken == "" || !client.AccessTokenExpiresAt.After(now.Add(5*time.Minute)) {
@@ -369,7 +379,42 @@ func (c Connector) Send(ctx context.Context, runtime sdk.Runtime, req sdk.Outbou
 	if result.MessageID == "" {
 		return result, fmt.Errorf("%s outbound attachments failed", Platform)
 	}
+	if hasDingtalkMentions(at) {
+		result.Raw["mention_delivery"] = sendDingtalkMention(ctx, client, accountState, req, at)
+	}
 	return result, nil
+}
+
+// dingtalkMentionDelivery records notification status independently of reply delivery.
+type dingtalkMentionDelivery struct {
+	Status string `json:"status"`
+	Reason string `json:"reason,omitempty"`
+}
+
+func hasDingtalkMentions(at dingtalk.AtOptions) bool {
+	return at.AtAll || len(at.AtUserIDs)+len(at.AtDingtalkIDs)+len(at.AtMobiles) > 0
+}
+
+// Markdown and OpenAPI text do not provide a reliable native mention. Use the
+// chat's authenticated session webhook for one text notification after delivery.
+// Never retry the delivered reply when this best-effort notification fails.
+func sendDingtalkMention(ctx context.Context, client *dingtalk.Client, account *beakstate.AccountState,
+	req sdk.OutboundMessage, at dingtalk.AtOptions) *dingtalkMentionDelivery {
+	if boolValue(req.Raw["force_openapi"]) {
+		return &dingtalkMentionDelivery{Status: "unsupported", Reason: "session_webhook_disabled"}
+	}
+	webhook, ok := account.SessionWebhooks[outboundStateKey(req)]
+	if !ok || !dingtalk.IsAllowedSessionWebhookURL(webhook.URL) || !webhook.ExpiresAt.After(time.Now().Add(10*time.Second)) {
+		return &dingtalkMentionDelivery{Status: "unsupported", Reason: "session_webhook_unavailable"}
+	}
+	_, err := client.SendWebhookTextMessage(ctx, webhook.URL, dingtalk.SendWebhookTextRequest{
+		Text: "Please see the reply above.", At: at,
+	})
+	if err != nil {
+		// Do not retain platform error text, which may contain webhook credentials.
+		return &dingtalkMentionDelivery{Status: "failed", Reason: "notification_send_failed"}
+	}
+	return &dingtalkMentionDelivery{Status: "sent"}
 }
 
 func (c Connector) Acknowledge(ctx context.Context, runtime sdk.Runtime, req sdk.OutboundAck) (*sdk.AckResult, error) {

@@ -220,7 +220,7 @@ func (c *Client) SendText(ctx context.Context, req SendTextRequest) (*SendTextRe
 	if robotCode == "" {
 		robotCode = strings.TrimSpace(c.ClientID)
 	}
-	msgParam, err := json.Marshal(textMsgParam(req.Text, req.At))
+	msgParam, err := json.Marshal(textMsgParam(req.Text))
 	if err != nil {
 		return nil, err
 	}
@@ -268,7 +268,7 @@ func (c *Client) SendMarkdown(ctx context.Context, req SendMarkdownRequest) (*Se
 	if robotCode == "" {
 		robotCode = strings.TrimSpace(c.ClientID)
 	}
-	msgParam, err := json.Marshal(markdownMsgParam(req.Title, req.Text, req.At))
+	msgParam, err := json.Marshal(markdownMsgParam(req.Title, req.Text))
 	if err != nil {
 		return nil, err
 	}
@@ -545,7 +545,7 @@ func (c *Client) SendWebhookTextMessage(ctx context.Context, sessionWebhook stri
 	body := map[string]any{
 		"msgtype": "text",
 		"text": map[string]string{
-			"content": textWithAtSuffix(req.Text, req.At),
+			"content": req.Text,
 		},
 	}
 	if at := webhookAtParam(req.At); len(at) > 0 {
@@ -576,7 +576,7 @@ func (c *Client) SendWebhookMarkdownMessage(ctx context.Context, sessionWebhook 
 		"msgtype": "markdown",
 		"markdown": map[string]string{
 			"title": markdownTitle(req.Title, req.Text),
-			"text":  markdownWithAtSuffix(req.Text, req.At),
+			"text":  req.Text,
 		},
 	}
 	if at := webhookAtParam(req.At); len(at) > 0 {
@@ -592,14 +592,14 @@ func (c *Client) SendWebhookMarkdownMessage(ctx context.Context, sessionWebhook 
 	return &resp, nil
 }
 
-func textMsgParam(text string, at AtOptions) map[string]any {
-	return map[string]any{"content": textWithAtSuffix(text, at)}
+func textMsgParam(text string) map[string]any {
+	return map[string]any{"content": text}
 }
 
-func markdownMsgParam(title string, text string, at AtOptions) map[string]any {
+func markdownMsgParam(title string, text string) map[string]any {
 	return map[string]any{
 		"title": markdownTitle(title, text),
-		"text":  markdownWithAtSuffix(text, at),
+		"text":  text,
 	}
 }
 
@@ -650,53 +650,6 @@ func truncateRunes(text string, max int) string {
 		return text
 	}
 	return string(runes[:max])
-}
-
-func textWithAtSuffix(text string, at AtOptions) string {
-	out := strings.TrimSpace(text)
-	ids := append(uniqueStrings(at.AtDingtalkIDs), uniqueStrings(at.AtUserIDs)...)
-	ids = append(ids, uniqueStrings(at.AtMobiles)...)
-	for _, id := range ids {
-		if id != "" && !containsAtToken(out, id) {
-			out = strings.TrimSpace(out + " @" + id)
-		}
-	}
-	if at.AtAll && !strings.Contains(strings.ToLower(out), "@all") {
-		out = strings.TrimSpace(out + " @all")
-	}
-	return out
-}
-
-func markdownWithAtSuffix(text string, at AtOptions) string {
-	out := strings.TrimSpace(text)
-	var suffixes []string
-	ids := append(uniqueStrings(at.AtDingtalkIDs), uniqueStrings(at.AtUserIDs)...)
-	ids = append(ids, uniqueStrings(at.AtMobiles)...)
-	for _, id := range ids {
-		if id != "" && !containsAtToken(out, id) {
-			suffixes = append(suffixes, "@"+id)
-		}
-	}
-	if at.AtAll && !strings.Contains(strings.ToLower(out), "@all") {
-		suffixes = append(suffixes, "@all")
-	}
-	if len(suffixes) == 0 {
-		return out
-	}
-	if out == "" {
-		return strings.Join(suffixes, " ")
-	}
-	return out + "\n\n" + strings.Join(suffixes, " ")
-}
-
-func containsAtToken(text string, id string) bool {
-	token := "@" + strings.TrimSpace(id)
-	for _, field := range strings.Fields(text) {
-		if strings.Trim(field, " \t\r\n,.;:!?，。！？、()[]{}<>") == token {
-			return true
-		}
-	}
-	return false
 }
 
 func webhookAtParam(at AtOptions) map[string]any {

@@ -235,6 +235,16 @@ x-acs-dingtalk-access-token: <access_token>
 
 如果需要强制走 Open API，即使当前 chat 有可用 `sessionWebhook`，可以在 outbound message 设置 `Raw["force_openapi"]=true`。
 
+### 群聊原生 @
+
+群聊 `Mentions`／`MentionAll` 使用有效的 session webhook 发送原生 text @，不在正文拼接 `@员工ID`。text 回复直接携带结构化 `at`；Markdown 正文保持原样，发送成功后补一条 `Please see the reply above.` text 通知。含附件的回复仍通过 OpenAPI 发送正文和附件，完成后最多补一条 webhook text 通知。私聊不增加 @，审批卡沿用原路径。
+
+`SendResult.Raw["mention_delivery"]` 单独记录 `status`（`sent`、`failed`、`unsupported`）及可选 `reason`。通知失败为 `notification_send_failed`；没有可信且未过期的 webhook 为 `session_webhook_unavailable`；显式 `force_openapi` 为 `session_webhook_disabled`。通知失败不返回整条回复失败，避免上层重试已送达的正文和附件；不自动重试通知。HTTP 超时仍存在平台是否已接收的不确定性，不能承诺 exactly-once。
+
+普通 `groupMessages/send` 没有已验证的原生 @ 契约，故不添加猜测的字段，不将 `@ID` 文本当作成功通知。Webhook 过期后仍可投递正文，但不能保证 @ 提醒。客户端通知开关也可能影响提醒。
+
+依据：钉钉官方 [OrgGroupSendRequest](https://github.com/alibabacloud-go/dingtalk/blob/master/robot_1_0/client.go) 与同群、同员工 ID 的 text/Markdown A/B 验证（仅 text 触发原生 @）。
+
 ## 轻量确认 Acknowledge
 
 Connector 暴露和其他 SDK 一样的 `Acknowledge` 方法，Beak host 可以统一调用 adapter：

@@ -440,7 +440,7 @@ func TestClientSendMarkdown(t *testing.T) {
 		if err := json.Unmarshal([]byte(body.MsgParam), &param); err != nil {
 			t.Fatal(err)
 		}
-		if param["title"] != "日志查询" || param["text"] != "# 日志查询\n- 错误日志\n\n@staff-1" {
+		if param["title"] != "日志查询" || param["text"] != "# 日志查询\n- 错误日志" {
 			t.Fatalf("param=%+v", param)
 		}
 		return jsonResponse(map[string]any{"processQueryKey": "pqk-markdown"})
@@ -548,7 +548,7 @@ func TestClientSendWebhookMarkdownMessage(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if body.MsgType != "markdown" || body.Markdown.Title != "日志查询" || body.Markdown.Text != "# 日志查询\n- 错误日志\n\n@staff-1" {
+		if body.MsgType != "markdown" || body.Markdown.Title != "日志查询" || body.Markdown.Text != "# 日志查询\n- 错误日志" {
 			t.Fatalf("body=%+v", body)
 		}
 		if len(body.At.AtUserIDs) != 1 || body.At.AtUserIDs[0] != "staff-1" {
@@ -588,7 +588,7 @@ func TestClientSendWebhookTextMessageMentions(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if body.MsgType != "text" || body.Text.Content != "reply @ding-1 @staff-1 @13800000000 @all" {
+		if body.MsgType != "text" || body.Text.Content != "reply" {
 			t.Fatalf("body=%+v", body)
 		}
 		if len(body.At.AtUserIDs) != 1 || body.At.AtUserIDs[0] != "staff-1" ||
@@ -615,7 +615,7 @@ func TestClientSendWebhookTextMessageMentions(t *testing.T) {
 	}
 }
 
-func TestClientSendWebhookTextMessageMentionBoundary(t *testing.T) {
+func TestClientSendWebhookTextMessagePreservesUserAtText(t *testing.T) {
 	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		var body struct {
 			Text struct {
@@ -625,7 +625,7 @@ func TestClientSendWebhookTextMessageMentionBoundary(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if body.Text.Content != "reply @staff-12 @staff-1" {
+		if body.Text.Content != "reply @staff-12" {
 			t.Fatalf("content=%q", body.Text.Content)
 		}
 		return jsonResponse(map[string]any{"errcode": 0, "errmsg": "ok"})

@@ -870,7 +870,7 @@ func TestDingTalkConnectorSendUsesSessionWebhook(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if body.MsgType != "text" || body.Text.Content != "reply @ding-1 @staff-1 @all" {
+		if body.MsgType != "text" || body.Text.Content != "reply" {
 			t.Fatalf("body=%+v", body)
 		}
 		if len(body.At.AtUserIDs) != 1 || body.At.AtUserIDs[0] != "staff-1" || len(body.At.AtDingtalkIDs) != 1 || body.At.AtDingtalkIDs[0] != "ding-1" || !body.At.IsAtAll {
@@ -1233,7 +1233,7 @@ func TestDingTalkConnectorSendUsesRequestedAccount(t *testing.T) {
 			if err := json.Unmarshal([]byte(body.MsgParam), &param); err != nil {
 				t.Fatal(err)
 			}
-			if param["content"] != "reply @ding-2 @staff-2 @all" {
+			if param["content"] != "reply" {
 				t.Fatalf("msgParam=%+v", param)
 			}
 			return testJSONResponse(map[string]any{"processQueryKey": "pqk-2"})

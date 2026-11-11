@@ -449,7 +449,7 @@ func TestDingTalkScenarioMentionsInboundAndSessionWebhookOutbound(t *testing.T) 
 	if sendResult.Raw["delivery_method"] != "session_webhook" {
 		t.Fatalf("send result=%+v", sendResult)
 	}
-	if sentText != "收到，我来处理 @ding-mention-sender @staff-mention-sender @all" {
+	if sentText != "收到，我来处理" {
 		t.Fatalf("sent text=%q", sentText)
 	}
 	if len(sentAt.AtUserIDs) != 1 || sentAt.AtUserIDs[0] != "staff-mention-sender" ||
@@ -492,7 +492,7 @@ func TestDingTalkScenarioExpiredSessionWebhookFallsBackToOpenAPI(t *testing.T) {
 			if body.RobotCode != "robot-expired" || body.OpenConversationID != "cid-expired" {
 				t.Fatalf("openapi body=%+v", body)
 			}
-			assertDingTalkTextParam(t, body.MsgParam, "fallback reply @ding-expired @all")
+			assertDingTalkTextParam(t, body.MsgParam, "fallback reply")
 			return scenarioJSONResponse(map[string]any{"processQueryKey": "pqk-expired"})
 		default:
 			t.Fatalf("expired sessionWebhook should not be used; unexpected request path: %s url=%s", r.URL.Path, r.URL.String())
