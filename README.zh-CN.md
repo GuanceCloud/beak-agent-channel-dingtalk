@@ -237,7 +237,7 @@ x-acs-dingtalk-access-token: <access_token>
 
 ### 群聊原生 @
 
-群聊 `Mentions`／`MentionAll` 使用有效的 session webhook 发送原生 text @，不在正文拼接 `@员工ID`。text 回复直接携带结构化 `at`；Markdown 正文保持原样，发送成功后补一条 `Please see the reply above.` text 通知。含附件的回复仍通过 OpenAPI 发送正文和附件，完成后最多补一条 webhook text 通知。私聊不增加 @，审批卡沿用原路径。
+群聊 `Mentions`／`MentionAll` 使用有效的 session webhook 发送原生 text @，不在正文拼接 `@员工ID`。text 回复直接携带结构化 `at`；Markdown 正文保持原样，发送成功后补一条 `Please see the reply above.` text 通知。含附件的 text 回复也优先使用 webhook 发送正文并携带 @，附件继续逐项通过 OpenAPI 发送，不另发提醒。媒体鉴权先于正文投递；正文已被 webhook 接收后，即使附件全部失败，也通过 AttachmentResults 返回失败，不把整个回复重发。正文没有平台 message ID，附件 ID 只放在 AttachmentResults。含附件的 Markdown 回复保持原 OpenAPI 正文与独立 text 通知行为；宿主选择 text 即可避免额外提醒。私聊不增加 @，审批卡沿用原路径。
 
 `SendResult.Raw["mention_delivery"]` 单独记录 `status`（`sent`、`failed`、`unsupported`）及可选 `reason`。通知失败为 `notification_send_failed`；没有可信且未过期的 webhook 为 `session_webhook_unavailable`；显式 `force_openapi` 为 `session_webhook_disabled`。通知失败不返回整条回复失败，避免上层重试已送达的正文和附件；不自动重试通知。HTTP 超时仍存在平台是否已接收的不确定性，不能承诺 exactly-once。
 

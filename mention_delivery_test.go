@@ -21,6 +21,7 @@ func TestNativeMentionDelivery(t *testing.T) {
 		name, format, chatType, webhook, status, reason string
 		mention, forceAPI, failNotice, failBody         bool
 		attachments, partialAttachments, attachmentOnly bool
+		allAttachmentsFail, failToken                   bool
 		wantTypes                                       []string
 	}{
 		{name: "markdown", format: "markdown", chatType: "group", webhook: "valid", mention: true, status: "sent", wantTypes: []string{"markdown", "text"}},
@@ -33,6 +34,12 @@ func TestNativeMentionDelivery(t *testing.T) {
 		{name: "missing text", format: "text", chatType: "group", mention: true, status: "unsupported", reason: "session_webhook_unavailable", wantTypes: []string{"sampleText"}},
 		{name: "untrusted webhook", format: "markdown", chatType: "group", webhook: "untrusted", mention: true, status: "unsupported", reason: "session_webhook_unavailable", wantTypes: []string{"sampleMarkdown"}},
 		{name: "forced OpenAPI", format: "markdown", chatType: "group", webhook: "valid", mention: true, forceAPI: true, status: "unsupported", reason: "session_webhook_disabled", wantTypes: []string{"sampleMarkdown"}},
+		{name: "text with two attachments", format: "text", chatType: "group", webhook: "valid", mention: true, attachments: true, status: "sent", wantTypes: []string{"text", "sampleFile", "sampleFile"}},
+		{name: "text with partial attachments", format: "text", chatType: "group", webhook: "valid", mention: true, attachments: true, partialAttachments: true, status: "sent", wantTypes: []string{"text", "sampleFile"}},
+		{name: "text with all attachments failed", format: "text", chatType: "group", webhook: "valid", mention: true, attachments: true, allAttachmentsFail: true, status: "sent", wantTypes: []string{"text"}},
+		{name: "text rejected before attachments", format: "text", chatType: "group", webhook: "valid", mention: true, attachments: true, failBody: true, wantTypes: []string{"text"}},
+		{name: "media token rejected before text", format: "text", chatType: "group", webhook: "valid", mention: true, attachments: true, failToken: true},
+		{name: "expired text with attachments", format: "text", chatType: "group", webhook: "expired", mention: true, attachments: true, status: "unsupported", reason: "session_webhook_unavailable", wantTypes: []string{"sampleText", "sampleFile", "sampleFile"}},
 		{name: "two attachments", format: "markdown", chatType: "group", webhook: "valid", mention: true, attachments: true, status: "sent", wantTypes: []string{"sampleMarkdown", "sampleFile", "sampleFile", "text"}},
 		{name: "partial attachments", format: "markdown", chatType: "group", webhook: "valid", mention: true, attachments: true, partialAttachments: true, status: "sent", wantTypes: []string{"sampleMarkdown", "sampleFile", "text"}},
 		{name: "attachment only", format: "markdown", chatType: "group", webhook: "valid", mention: true, attachments: true, attachmentOnly: true, status: "sent", wantTypes: []string{"sampleFile", "sampleFile", "text"}},
@@ -55,10 +62,15 @@ func TestNativeMentionDelivery(t *testing.T) {
 				}
 				account.State["session_webhooks"] = map[string]any{key: map[string]any{"url": url, "expires_at": expires.Format(time.RFC3339Nano)}}
 			}
+			if tc.failToken {
+				delete(account.State, "access_token")
+			}
 			var types []string
 			var notifications int
 			client := &http.Client{Transport: testRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 				switch r.URL.Path {
+				case "/v1.0/oauth2/accessToken":
+					return testJSONResponse(map[string]any{"code": "InvalidClient", "message": "rejected"})
 				case "/gettoken":
 					return testJSONResponse(map[string]any{"errcode": 0, "access_token": "test-media-token"})
 				case "/media/upload":
@@ -113,33 +125,41 @@ func TestNativeMentionDelivery(t *testing.T) {
 				if tc.partialAttachments {
 					req.Attachments[1].Path = path + ".missing"
 				}
+				if tc.allAttachmentsFail {
+					req.Attachments[0].Path = path + ".missing"
+					req.Attachments[1].Path = path + ".missing"
+				}
 				if tc.attachmentOnly {
 					req.Text = ""
 				}
 			}
 			result, err := NewConnector().Send(context.Background(), sdk.Runtime{Account: account, HTTPClient: client}, req)
-			if (err != nil) != tc.failBody {
+			if (err != nil) != (tc.failBody || tc.failToken) {
 				t.Fatalf("Send error=%v; body failure=%v", err, tc.failBody)
 			}
 			if !reflect.DeepEqual(types, tc.wantTypes) {
 				t.Errorf("requests=%v, want %v", types, tc.wantTypes)
 			}
 			wantNotifications := 0
-			if tc.status == "sent" || tc.status == "failed" {
+			if tc.status == "sent" || tc.status == "failed" || (tc.failBody && tc.format == "text") {
 				wantNotifications = 1
 			}
 			if notifications != wantNotifications {
 				t.Errorf("notifications=%d, want %d", notifications, wantNotifications)
 			}
-			if tc.failBody {
+			if tc.failBody || tc.failToken {
 				return
 			}
 			if tc.attachments {
-				if len(result.AttachmentResults) != 2 || result.AttachmentResults[0].Status != sdk.AttachmentStatusSent {
+				firstStatus := sdk.AttachmentStatusSent
+				if tc.allAttachmentsFail {
+					firstStatus = sdk.AttachmentStatusFailed
+				}
+				if len(result.AttachmentResults) != 2 || result.AttachmentResults[0].Status != firstStatus {
 					t.Fatalf("attachments=%+v", result.AttachmentResults)
 				}
 				want := sdk.AttachmentStatusSent
-				if tc.partialAttachments {
+				if tc.partialAttachments || tc.allAttachmentsFail {
 					want = sdk.AttachmentStatusFailed
 				}
 				if result.AttachmentResults[1].Status != want {
