@@ -543,6 +543,7 @@ func TestClientSendWebhookMarkdownMessage(t *testing.T) {
 			} `json:"markdown"`
 			At struct {
 				AtUserIDs []string `json:"atUserIds"`
+				AtMobiles []string `json:"atMobiles"`
 			} `json:"at"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -551,7 +552,8 @@ func TestClientSendWebhookMarkdownMessage(t *testing.T) {
 		if body.MsgType != "markdown" || body.Markdown.Title != "日志查询" || body.Markdown.Text != "# 日志查询\n- 错误日志" {
 			t.Fatalf("body=%+v", body)
 		}
-		if len(body.At.AtUserIDs) != 1 || body.At.AtUserIDs[0] != "staff-1" {
+		if len(body.At.AtUserIDs) != 2 || body.At.AtUserIDs[0] != "staff-1" || body.At.AtUserIDs[1] != "staff-2" ||
+			len(body.At.AtMobiles) != 1 || body.At.AtMobiles[0] != "13800000000" {
 			t.Fatalf("at=%+v", body.At)
 		}
 		return jsonResponse(map[string]any{"errcode": 0, "errmsg": "ok"})
@@ -561,7 +563,7 @@ func TestClientSendWebhookMarkdownMessage(t *testing.T) {
 	_, err := client.SendWebhookMarkdownMessage(context.Background(), "https://oapi.dingtalk.com/robot/sendBySession?session=s1", SendWebhookMarkdownRequest{
 		Title: "日志查询",
 		Text:  "# 日志查询\n- 错误日志",
-		At:    AtOptions{AtUserIDs: []string{"staff-1"}},
+		At:    AtOptions{AtUserIDs: []string{" staff-1 ", "staff-1", "staff-2"}, AtMobiles: []string{"13800000000", "13800000000"}},
 	})
 	if err != nil {
 		t.Fatal(err)

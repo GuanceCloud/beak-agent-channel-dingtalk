@@ -873,7 +873,7 @@ func TestDingTalkConnectorSendUsesSessionWebhook(t *testing.T) {
 		if body.MsgType != "text" || body.Text.Content != "reply" {
 			t.Fatalf("body=%+v", body)
 		}
-		if len(body.At.AtUserIDs) != 1 || body.At.AtUserIDs[0] != "staff-1" || len(body.At.AtDingtalkIDs) != 1 || body.At.AtDingtalkIDs[0] != "ding-1" || !body.At.IsAtAll {
+		if len(body.At.AtUserIDs) != 0 || len(body.At.AtDingtalkIDs) != 0 || body.At.IsAtAll {
 			t.Fatalf("at=%+v", body.At)
 		}
 		return testJSONResponse(map[string]any{"errcode": 0, "errmsg": "ok"})

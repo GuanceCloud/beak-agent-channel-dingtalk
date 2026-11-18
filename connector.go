@@ -255,15 +255,10 @@ func (c Connector) Send(ctx context.Context, runtime sdk.Runtime, req sdk.Outbou
 		client.AccessToken = accountState.AccessToken
 		client.AccessTokenExpiresAt = accountState.AccessTokenExpires
 	}
-	at := dingtalkOutboundAtOptions(req)
-	if req.ChatType != sdk.ChatTypeGroup {
-		at = dingtalk.AtOptions{}
-	}
 	format := dingtalkOutboundFormat(req)
 	webhook, hasWebhook := accountState.SessionWebhooks[outboundStateKey(req)]
 	useWebhook := hasWebhook && !boolValue(req.Raw["force_openapi"]) &&
-		dingtalk.IsAllowedSessionWebhookURL(webhook.URL) && webhook.ExpiresAt.After(now.Add(10*time.Second)) &&
-		(len(req.Attachments) == 0 || format == "text")
+		dingtalk.IsAllowedSessionWebhookURL(webhook.URL) && webhook.ExpiresAt.After(now.Add(10*time.Second))
 	// Prepare media authentication before delivering any text. A token failure
 	// must not make the host retry a body that the webhook already accepted.
 	if (!useWebhook || len(req.Attachments) > 0) &&
@@ -291,7 +286,6 @@ func (c Connector) Send(ctx context.Context, runtime sdk.Runtime, req sdk.Outbou
 		} else {
 			resp, err = client.SendWebhookTextMessage(ctx, webhook.URL, dingtalk.SendWebhookTextRequest{
 				Text: req.Text,
-				At:   at,
 			})
 		}
 		if err != nil {
@@ -308,13 +302,7 @@ func (c Connector) Send(ctx context.Context, runtime sdk.Runtime, req sdk.Outbou
 				"response":        resp.Raw,
 			},
 		}
-		if hasDingtalkMentions(at) {
-			if format == "markdown" {
-				result.Raw["mention_delivery"] = sendDingtalkMention(ctx, client, accountState, req, at)
-			} else {
-				result.Raw["mention_delivery"] = &dingtalkMentionDelivery{Status: "sent"}
-			}
-		}
+
 		textSentViaWebhook = true
 		if len(req.Attachments) == 0 {
 			return result, nil
@@ -339,9 +327,9 @@ func (c Connector) Send(ctx context.Context, runtime sdk.Runtime, req sdk.Outbou
 		var resp *dingtalk.SendTextResponse
 		var sendErr error
 		if format == "markdown" {
-			resp, sendErr = client.SendMarkdown(ctx, dingtalk.SendMarkdownRequest{ChatType: req.ChatType, ChatID: strings.TrimSpace(req.ChatID), Title: dingtalkOutboundTitle(req), Text: req.Text, RobotCode: robotCode, MessageUUID: req.MessageUUID, At: at})
+			resp, sendErr = client.SendMarkdown(ctx, dingtalk.SendMarkdownRequest{ChatType: req.ChatType, ChatID: strings.TrimSpace(req.ChatID), Title: dingtalkOutboundTitle(req), Text: req.Text, RobotCode: robotCode, MessageUUID: req.MessageUUID})
 		} else {
-			resp, sendErr = client.SendText(ctx, dingtalk.SendTextRequest{ChatType: req.ChatType, ChatID: strings.TrimSpace(req.ChatID), Text: req.Text, RobotCode: robotCode, MessageUUID: req.MessageUUID, At: at})
+			resp, sendErr = client.SendText(ctx, dingtalk.SendTextRequest{ChatType: req.ChatType, ChatID: strings.TrimSpace(req.ChatID), Text: req.Text, RobotCode: robotCode, MessageUUID: req.MessageUUID})
 		}
 		if sendErr != nil {
 			return nil, sendErr
@@ -394,42 +382,8 @@ func (c Connector) Send(ctx context.Context, runtime sdk.Runtime, req sdk.Outbou
 	if result.MessageID == "" && !textSentViaWebhook {
 		return result, fmt.Errorf("%s outbound attachments failed", Platform)
 	}
-	if hasDingtalkMentions(at) && !textSentViaWebhook {
-		result.Raw["mention_delivery"] = sendDingtalkMention(ctx, client, accountState, req, at)
-	}
+
 	return result, nil
-}
-
-// dingtalkMentionDelivery records notification status independently of reply delivery.
-type dingtalkMentionDelivery struct {
-	Status string `json:"status"`
-	Reason string `json:"reason,omitempty"`
-}
-
-func hasDingtalkMentions(at dingtalk.AtOptions) bool {
-	return at.AtAll || len(at.AtUserIDs)+len(at.AtDingtalkIDs)+len(at.AtMobiles) > 0
-}
-
-// Markdown and OpenAPI text do not provide a reliable native mention. Use the
-// chat's authenticated session webhook for one text notification after delivery.
-// Never retry the delivered reply when this best-effort notification fails.
-func sendDingtalkMention(ctx context.Context, client *dingtalk.Client, account *beakstate.AccountState,
-	req sdk.OutboundMessage, at dingtalk.AtOptions) *dingtalkMentionDelivery {
-	if boolValue(req.Raw["force_openapi"]) {
-		return &dingtalkMentionDelivery{Status: "unsupported", Reason: "session_webhook_disabled"}
-	}
-	webhook, ok := account.SessionWebhooks[outboundStateKey(req)]
-	if !ok || !dingtalk.IsAllowedSessionWebhookURL(webhook.URL) || !webhook.ExpiresAt.After(time.Now().Add(10*time.Second)) {
-		return &dingtalkMentionDelivery{Status: "unsupported", Reason: "session_webhook_unavailable"}
-	}
-	_, err := client.SendWebhookTextMessage(ctx, webhook.URL, dingtalk.SendWebhookTextRequest{
-		Text: "Please see the reply above.", At: at,
-	})
-	if err != nil {
-		// Do not retain platform error text, which may contain webhook credentials.
-		return &dingtalkMentionDelivery{Status: "failed", Reason: "notification_send_failed"}
-	}
-	return &dingtalkMentionDelivery{Status: "sent"}
 }
 
 func (c Connector) Acknowledge(ctx context.Context, runtime sdk.Runtime, req sdk.OutboundAck) (*sdk.AckResult, error) {
@@ -1145,44 +1099,6 @@ func dingtalkMentionIdentities(event *dingtalk.StreamEvent) []sdk.MentionIdentit
 	return uniqueMentionIdentities(out)
 }
 
-func dingtalkOutboundAtOptions(req sdk.OutboundMessage) dingtalk.AtOptions {
-	out := dingtalk.AtOptions{
-		AtAll: req.MentionAll || boolValue(req.Raw["mention_all"]) || boolValue(req.Raw["mentionAll"]) ||
-			boolValue(req.Raw["at_all"]) || boolValue(req.Raw["atAll"]) || boolValue(req.Raw["isAtAll"]),
-	}
-	for _, id := range stringSlice(firstValue(req.Raw["at_user_ids"], req.Raw["atUserIds"], req.Raw["user_ids"], req.Raw["userIds"])) {
-		out.AtUserIDs = append(out.AtUserIDs, id)
-	}
-	for _, id := range stringSlice(firstValue(req.Raw["at_dingtalk_ids"], req.Raw["atDingtalkIds"], req.Raw["dingtalk_ids"], req.Raw["dingtalkIds"])) {
-		out.AtDingtalkIDs = append(out.AtDingtalkIDs, id)
-	}
-	for _, id := range stringSlice(firstValue(req.Raw["at_mobiles"], req.Raw["atMobiles"], req.Raw["mobiles"])) {
-		out.AtMobiles = append(out.AtMobiles, id)
-	}
-	mentions := append([]sdk.MentionIdentity{}, req.Mentions...)
-	mentions = append(mentions, rawMentionIdentities(req.Raw["mentions"])...)
-	for _, mention := range mentions {
-		id := strings.TrimSpace(mention.ID)
-		if id == "" {
-			continue
-		}
-		switch strings.ToLower(strings.TrimSpace(mention.IDType)) {
-		case "all", "mention_all", "at_all":
-			out.AtAll = true
-		case "dingtalk_id", "dingtalk_user_id", "chatbot_user_id", "robot_user_id", "robot_code":
-			out.AtDingtalkIDs = append(out.AtDingtalkIDs, id)
-		case "mobile", "phone":
-			out.AtMobiles = append(out.AtMobiles, id)
-		default:
-			out.AtUserIDs = append(out.AtUserIDs, id)
-		}
-	}
-	out.AtUserIDs = uniqueStringList(out.AtUserIDs)
-	out.AtDingtalkIDs = uniqueStringList(out.AtDingtalkIDs)
-	out.AtMobiles = uniqueStringList(out.AtMobiles)
-	return out
-}
-
 func dingtalkOutboundFormat(req sdk.OutboundMessage) string {
 	format := strings.ToLower(strings.TrimSpace(firstString(
 		req.Format,
@@ -1221,63 +1137,6 @@ func dingtalkEventOwnershipValid(account sdk.ChannelAccount, event *dingtalk.Str
 		return true
 	}
 	return received == expected
-}
-
-func rawMentionIdentities(value any) []sdk.MentionIdentity {
-	switch typed := value.(type) {
-	case []sdk.MentionIdentity:
-		return typed
-	case []any:
-		out := make([]sdk.MentionIdentity, 0, len(typed))
-		for _, item := range typed {
-			out = append(out, mentionIdentityFromAny(item))
-		}
-		return out
-	case []map[string]any:
-		out := make([]sdk.MentionIdentity, 0, len(typed))
-		for _, item := range typed {
-			out = append(out, mentionIdentityFromAny(item))
-		}
-		return out
-	case string:
-		if strings.TrimSpace(typed) == "" {
-			return nil
-		}
-		var parsed []map[string]any
-		if err := json.Unmarshal([]byte(typed), &parsed); err == nil {
-			out := make([]sdk.MentionIdentity, 0, len(parsed))
-			for _, item := range parsed {
-				out = append(out, mentionIdentityFromAny(item))
-			}
-			return out
-		}
-	case json.RawMessage:
-		var parsed []map[string]any
-		if err := json.Unmarshal(typed, &parsed); err == nil {
-			out := make([]sdk.MentionIdentity, 0, len(parsed))
-			for _, item := range parsed {
-				out = append(out, mentionIdentityFromAny(item))
-			}
-			return out
-		}
-	}
-	return nil
-}
-
-func mentionIdentityFromAny(value any) sdk.MentionIdentity {
-	mention, ok := value.(sdk.MentionIdentity)
-	if ok {
-		return mention
-	}
-	item, ok := value.(map[string]any)
-	if !ok {
-		return sdk.MentionIdentity{}
-	}
-	return sdk.MentionIdentity{
-		ID:          firstString(item["id"], item["ID"], item["user_id"], item["userId"], item["dingtalk_id"], item["dingtalkId"], item["mobile"]),
-		IDType:      firstString(item["id_type"], item["idType"], item["IDType"], item["type"]),
-		DisplayName: firstString(item["display_name"], item["displayName"], item["name"]),
-	}
 }
 
 func uniqueMentionIdentities(mentions []sdk.MentionIdentity) []sdk.MentionIdentity {

@@ -452,9 +452,7 @@ func TestDingTalkScenarioMentionsInboundAndSessionWebhookOutbound(t *testing.T) 
 	if sentText != "收到，我来处理" {
 		t.Fatalf("sent text=%q", sentText)
 	}
-	if len(sentAt.AtUserIDs) != 1 || sentAt.AtUserIDs[0] != "staff-mention-sender" ||
-		len(sentAt.AtDingtalkIDs) != 1 || sentAt.AtDingtalkIDs[0] != "ding-mention-sender" ||
-		!sentAt.IsAtAll {
+	if len(sentAt.AtUserIDs) != 0 || len(sentAt.AtDingtalkIDs) != 0 || sentAt.IsAtAll {
 		t.Fatalf("sent at=%+v", sentAt)
 	}
 }

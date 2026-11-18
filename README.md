@@ -235,15 +235,13 @@ x-acs-dingtalk-access-token: <access_token>
 
 To force Open API delivery even when a valid `sessionWebhook` exists, set `Raw["force_openapi"]=true` on the outbound message.
 
-### Native group mentions
+### Reply formatting and mentions
 
-Group `Mentions` / `MentionAll` use text messages through a valid session webhook. The SDK does not append `@employeeID` to the body. A text reply carries structured `at` fields directly. A Markdown reply retains its body and is followed by one text notification, `Please see the reply above.` Text replies with attachments also use the webhook for the body and its native mention. Attachments retain individual OpenAPI delivery, with no extra notification. Media authentication precedes body delivery. After the webhook accepts the body, even a complete attachment failure is returned through AttachmentResults without failing and replaying the entire reply. The body has no platform message ID; attachment IDs remain in AttachmentResults. Markdown replies with attachments retain their OpenAPI body and separate text notification; hosts can select text to avoid that extra notification. Direct chats do not add mentions. Interaction cards retain their existing path.
+The connector preserves the requested reply format. Markdown replies keep their original body and title. Outbound `Mentions`, `MentionAll`, and legacy mention fields in `Raw` are ignored: the connector sends no `at` fields, generated `@ID` markers, or separate text notifications. Caller-provided text is preserved, including any literal `@` text. The connector does not report `mention_delivery` for these replies.
 
-`SendResult.Raw["mention_delivery"]` reports `status` (`sent`, `failed`, or `unsupported`) and an optional `reason`. Reasons are `notification_send_failed`, `session_webhook_unavailable`, and `session_webhook_disabled` (explicit `force_openapi`). Notification failure does not fail or retry an already delivered reply. Notifications have no automatic retry. A transport timeout can leave platform acceptance unknown; this is not an exactly-once guarantee.
+Replies with attachments use a valid session webhook for the body and individual OpenAPI requests for attachments. Media authentication precedes body delivery. After body delivery succeeds, attachment failures are returned through AttachmentResults without replaying the body. When the webhook is unavailable, expired, or disabled by `force_openapi`, the connector sends the original body through OpenAPI.
 
-The ordinary `groupMessages/send` endpoint has no verified native mention contract. The SDK does not send speculative fields or treat a literal `@ID` as a successful notification. An expired webhook still permits reply delivery through OpenAPI, but cannot guarantee a mention. Client notification settings can also affect alerts.
-
-References: official DingTalk [OrgGroupSendRequest](https://github.com/alibabacloud-go/dingtalk/blob/master/robot_1_0/client.go), and a same-chat, same-staff-ID text/Markdown A/B check where only text produced a native mention.
+Inbound mention parsing and detection of messages addressed to the bot remain supported. Interaction cards retain their existing path. Ordinary replies do not require a card template.
 
 ## Lightweight Acknowledgement
 
